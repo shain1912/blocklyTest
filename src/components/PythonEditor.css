@@ -1,0 +1,37 @@
+.python-editor-container {
+    display: flex;
+    height: 100%;
+    background: #1e1e1e;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 14px;
+}
+
+.python-editor-lines {
+    padding: 10px 0;
+    background: #252526;
+    color: #858585;
+    text-align: right;
+    min-width: 40px;
+    user-select: none;
+    border-right: 1px solid #333;
+}
+
+.line-number {
+    padding: 0 8px;
+    line-height: 1.5;
+}
+
+.python-code-area {
+    flex: 1;
+    background: transparent;
+    color: #d4d4d4;
+    border: none;
+    padding: 10px;
+    resize: none;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: 1.5;
+    outline: none;
+    white-space: pre;
+    overflow: auto;
+}
