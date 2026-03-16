@@ -1,13 +1,26 @@
 import React, { useEffect, useRef } from 'react';
 import * as Blockly from 'blockly';
 import { javascriptGenerator } from 'blockly/javascript';
-import { toolboxCategories } from '../blocks/customBlocks';
-import '../blocks/structure'; // Import structure blocks
+import { toolboxCategories, getFullToolboxConfig } from '../blocks/customBlocks';
+import '../blocks/structure';
+import '../blocks/classes';
 import './BlocklyEditor.css';
 
-const BlocklyEditor = ({ onCodeChange, onMount }) => {
+const BlocklyEditor = ({ onCodeChange, onMount, toolboxVersion }) => {
   const blocklyDiv = useRef(null);
   const workspace = useRef(null);
+  const onCodeChangeRef = useRef(onCodeChange);
+  const onMountRef = useRef(onMount);
+  useEffect(() => { onCodeChangeRef.current = onCodeChange; }, [onCodeChange]);
+  useEffect(() => { onMountRef.current = onMount; }, [onMount]);
+
+  // Dynamic toolbox update when libraries are installed/uninstalled
+  useEffect(() => {
+    if (!workspace.current || toolboxVersion === undefined) return;
+    try {
+      workspace.current.updateToolbox(getFullToolboxConfig());
+    } catch (e) { console.warn('Toolbox update failed:', e); }
+  }, [toolboxVersion]);
 
   useEffect(() => {
     if (blocklyDiv.current && !workspace.current) {
@@ -66,11 +79,11 @@ const BlocklyEditor = ({ onCodeChange, onMount }) => {
 
       workspace.current.addChangeListener(() => {
         if (!workspace.current) return;
-        onCodeChange(workspace.current);
+        onCodeChangeRef.current(workspace.current);
       });
 
-      if (onMount) {
-        onMount(workspace.current);
+      if (onMountRef.current) {
+        onMountRef.current(workspace.current);
       }
     }
 
@@ -80,7 +93,7 @@ const BlocklyEditor = ({ onCodeChange, onMount }) => {
         workspace.current = null;
       }
     };
-  }, [onCodeChange]);
+  }, []); // Empty deps: workspace injected only once
 
   const handleClear = () => {
     if (workspace.current) {
@@ -101,7 +114,7 @@ const BlocklyEditor = ({ onCodeChange, onMount }) => {
   };
 
   return (
-    <div className="blockly-container">
+    <div className="blockly-container" style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, height: '100%' }}>
       <div className="blockly-header">
         <div className="header-left">
           <h2>🧱 Blocks</h2>

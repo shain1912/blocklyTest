@@ -3,6 +3,11 @@ import * as Blockly from 'blockly/core';
 import { javascriptGenerator } from 'blockly/javascript';
 import { pythonGenerator } from 'blockly/python';
 import './structure'; // Register library structure blocks
+import { classToolboxCategory } from './classes'; // Register class/OOP blocks
+import { buildLibraryToolboxCategories, restoreLibraries } from '../utils/libraryManager';
+
+// Restore previously installed libraries on boot
+restoreLibraries();
 
 // Initialize Python generator
 // If pythonGenerator isn't available in some versions, we might need to check imports.
@@ -49,7 +54,7 @@ Blockly.Blocks['variable'] = {
 javascriptGenerator.forBlock['variable'] = function (_block) {
   const varName = _block.getFieldValue('VAR_NAME');
   const value = _block.getFieldValue('VALUE');
-  return `let ${varName} = ${value}; \n`;
+  return `var ${varName} = ${value}; window.spriteController?.setVariable(${JSON.stringify(varName)}, ${varName});\n`;
 };
 
 pythonGenerator.forBlock['variable'] = function (_block) {
@@ -76,7 +81,7 @@ Blockly.Blocks['change_variable'] = {
 javascriptGenerator.forBlock['change_variable'] = function (_block) {
   const varName = _block.getFieldValue('VAR_NAME');
   const value = _block.getFieldValue('VALUE');
-  return `${varName} += ${value}; \n`;
+  return `${varName} += ${value}; window.spriteController?.setVariable(${JSON.stringify(varName)}, ${varName});\n`;
 };
 
 pythonGenerator.forBlock['change_variable'] = function (_block) {
@@ -602,7 +607,7 @@ Blockly.Blocks['color_touching'] = {
   init: function () {
     this.appendDummyInput()
       .appendField("touching color")
-      .appendField(new Blockly.FieldColour("#ff0000"), "COLOR");
+      .appendField(new Blockly.FieldTextInput("#ff0000"), "COLOR");
     this.setOutput(true, null);
     this.setColour(200);
     this.setTooltip("Checks if sprite is touching a color");
@@ -856,12 +861,6 @@ pythonGenerator.forBlock['think_for_seconds'] = function (_block) {
   const text = pythonGenerator.valueToCode(_block, 'TEXT', pythonGenerator.ORDER_NONE) || '""';
   const seconds = _block.getFieldValue('SECONDS');
   return `sprite.think(${text}, ${seconds})\n`;
-};
-
-pythonGenerator.forBlock['think_for_seconds'] = function (_block) {
-  const text = _block.getFieldValue('TEXT');
-  const seconds = _block.getFieldValue('SECONDS');
-  return `sprite.think("${text}", ${seconds})\n`;
 };
 
 Blockly.Blocks['switch_costume'] = {
@@ -1554,6 +1553,50 @@ pythonGenerator.forBlock['when_flag_clicked'] = function (_block) {
   return '# When Green Flag Clicked\n';
 };
 
+// ── MakeCode-style hat blocks ─────────────────────────────────────────────────
+
+Blockly.Blocks['on_start'] = {
+  init: function () {
+    this.appendDummyInput()
+      .appendField('▶  시작하면');
+    this.appendStatementInput('DO').setCheck(null);
+    this.setColour('#16a34a');
+    this.setTooltip('Run 버튼을 누르면 이 블록 안의 코드만 실행됩니다');
+    this.setHelpUrl('');
+    // Hat block: no previous statement
+  }
+};
+
+javascriptGenerator.forBlock['on_start'] = function (block) {
+  return javascriptGenerator.statementToCode(block, 'DO');
+};
+
+pythonGenerator.forBlock['on_start'] = function (block) {
+  return pythonGenerator.statementToCode(block, 'DO');
+};
+
+Blockly.Blocks['on_forever'] = {
+  init: function () {
+    this.appendDummyInput()
+      .appendField('♾️  무한반복');
+    this.appendStatementInput('DO').setCheck(null);
+    this.setColour('#1d4ed8');
+    this.setTooltip('이 블록 안의 코드를 무한 반복합니다');
+    this.setHelpUrl('');
+    // Hat block: no previous statement
+  }
+};
+
+javascriptGenerator.forBlock['on_forever'] = function (block) {
+  const body = javascriptGenerator.statementToCode(block, 'DO') || '';
+  return `while (window.__running !== false) {\n${body}  await new Promise(r => setTimeout(r, 16));\n}\n`;
+};
+
+pythonGenerator.forBlock['on_forever'] = function (block) {
+  const body = pythonGenerator.statementToCode(block, 'DO') || '  pass\n';
+  return `while True:\n${body}\n`;
+};
+
 Blockly.Blocks['join'] = {
   init: function () {
     this.appendDummyInput()
@@ -1658,12 +1701,12 @@ export const toolboxCategories = [
   {
     kind: "category",
     name: "Events",
-    colour: "#009900", // MakeCode Basic Green
+    colour: "#009900",
     contents: [
+      { kind: "block", type: "on_start" },
+      { kind: "block", type: "on_forever" },
+      { kind: "sep" },
       { kind: "block", type: "when_flag_clicked" },
-      // { kind: "block", type: "when_key_pressed" }, // Not implemented yet
-      // { kind: "block", type: "broadcast" },
-      // { kind: "block", type: "when_i_receive" }
     ]
   },
   {
@@ -1761,26 +1804,28 @@ export const toolboxCategories = [
     name: "Library",
     colour: "#9933cc", // Purple
     contents: [
-      {
-        kind: "block",
-        type: "structure_module_def"
-      },
-      {
-        kind: "block",
-        type: "structure_typed_function"
-      },
-      {
-        kind: "block",
-        type: "structure_return_typed"
-      },
-      {
-        kind: "block",
-        type: "structure_import"
-      },
-      {
-        kind: "block",
-        type: "structure_call"
-      }
+      { kind: "block", type: "structure_module_def" },
+      { kind: "block", type: "structure_typed_function" },
+      { kind: "block", type: "structure_return_typed" },
+      { kind: "block", type: "structure_import" },
+      { kind: "block", type: "structure_call" }
     ]
-  }
+  },
+  classToolboxCategory,
+  ...buildLibraryToolboxCategories()
 ];
+
+// Static base categories (everything except dynamic library ones)
+const BASE_CATEGORIES = toolboxCategories.filter(c =>
+  !c.name?.includes('📦') && !c.name?.includes('🐢') && !c.name?.includes('🎮')
+);
+
+// Call this after installing/uninstalling a library to get a fresh toolbox config
+export const getFullToolboxConfig = () => ({
+  kind: 'categoryToolbox',
+  contents: [
+    ...BASE_CATEGORIES,
+    classToolboxCategory,
+    ...buildLibraryToolboxCategories()
+  ]
+});

@@ -1,9 +1,11 @@
 .python-editor-container {
     display: flex;
     height: 100%;
+    width: 100%;
     background: #1e1e1e;
     font-family: 'Consolas', 'Monaco', monospace;
     font-size: 14px;
+    overflow: hidden;
 }
 
 .python-editor-lines {
@@ -23,6 +25,8 @@
 
 .python-code-area {
     flex: 1;
+    min-width: 0;
+    width: 0;
     background: transparent;
     color: #d4d4d4;
     border: none;
@@ -34,4 +38,5 @@
     outline: none;
     white-space: pre;
     overflow: auto;
+    box-sizing: border-box;
 }

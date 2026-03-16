@@ -101,11 +101,19 @@
   overflow: auto;
 }
 
+.stage-section {
+  flex: 0 0 auto;
+  height: 50%;
+  min-height: 180px;
+  overflow: hidden;
+}
+
 .output-section {
   flex: 1;
-  padding: 20px;
+  padding: 12px 16px;
   background: rgba(0, 0, 0, 0.2);
   overflow: auto;
+  min-height: 80px;
 }
 
 /* Footer / Controls */
@@ -238,4 +246,66 @@
 .editor-section>div[style*="block"] {
   height: calc(100% - 60px) !important;
   width: 100%;
+}
+
+/* Editor body: horizontal flex so AI/lib panels sit beside the editor */
+.editor-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* AI and Library side panels */
+.ai-panel,
+.lib-panel {
+  width: 320px;
+  min-width: 280px;
+  max-width: 400px;
+  flex-shrink: 0;
+  height: 100%;
+  overflow: hidden;
+  border-left: 1px solid #1e293b;
+}
+
+/* Header tool buttons */
+.editor-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.tool-btn {
+  background: transparent;
+  border: 1px solid #334155;
+  color: #94a3b8;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.tool-btn:hover {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+.tool-btn.active {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: #6366f1;
+  color: #a5b4fc;
+}
+
+/* Controls section */
+.controls-section {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid #1e293b;
+  background: #0d1117;
+  flex-shrink: 0;
 }

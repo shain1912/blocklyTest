@@ -9,14 +9,9 @@ import * as Blockly from 'blockly/core';
 import './App.css';
 
 import FileExplorer from './components/FileExplorer';
+import AIAgent from './components/AIAgent';
+import LibraryManager from './components/LibraryManager';
 import { pythonToBlockly } from './utils/transpiler';
-// Using native crypto.randomUUID or a fallback
-const uuidv4 = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-};
 
 function App() {
   const [mode, setMode] = useState('blocks'); // 'blocks' | 'python'
@@ -24,7 +19,30 @@ function App() {
   const [pythonCode, setPythonCode] = useState(''); // Python code (for display)
   const [output, setOutput] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [showAI, setShowAI] = useState(false);
+  const [showLibraryManager, setShowLibraryManager] = useState(false);
+  const [toolboxVersion, setToolboxVersion] = useState(0);
   const workspaceRef = useRef(null);
+  const workspaceSnapshot = useRef(null);   // Blockly JSON saved when switching Blocks→Python
+  const pythonAtSnapshot = useRef('');       // Python text at the time of snapshot
+
+  // Generate code only from hat blocks (on_start / on_forever) if present,
+  // otherwise fall back to all blocks (backward compat).
+  const generateCodeFromWorkspace = useCallback((workspace) => {
+    const HAT_TYPES = ['on_start', 'on_forever', 'when_flag_clicked'];
+    const topBlocks = workspace.getTopBlocks(false);
+    const hatBlocks = topBlocks.filter(b => HAT_TYPES.includes(b.type));
+
+    if (hatBlocks.length > 0) {
+      const jsCode = hatBlocks.map(b => javascriptGenerator.blockToCode(b)).join('\n');
+      const pyCode = hatBlocks.map(b => pythonGenerator.blockToCode(b)).join('\n');
+      return { jsCode, pyCode };
+    }
+    return {
+      jsCode: javascriptGenerator.workspaceToCode(workspace),
+      pyCode: pythonGenerator.workspaceToCode(workspace),
+    };
+  }, []);
 
   /* Updated Code Change Handler */
   const handleCodeChange = useCallback((workspace) => {
@@ -35,14 +53,13 @@ function App() {
     if (mode === 'python') return;
 
     try {
-      const jsCode = javascriptGenerator.workspaceToCode(workspace);
-      const pyCode = pythonGenerator.workspaceToCode(workspace);
+      const { jsCode, pyCode } = generateCodeFromWorkspace(workspace);
       setCode(jsCode);
       setPythonCode(pyCode);
     } catch (e) {
       console.warn('Code generation failed:', e);
     }
-  }, [mode]);
+  }, [mode, generateCodeFromWorkspace]);
 
   /* Mode Toggle with Bidirectional Sync */
   const handleModeToggle = (targetMode) => {
@@ -55,45 +72,45 @@ function App() {
 
       // 2. Defer Load to ensure DOM is rendered
       setTimeout(() => {
-        if (pythonCode.trim() && workspaceRef.current) {
+        if (!workspaceRef.current) return;
+        Blockly.svgResize(workspaceRef.current);
+
+        // If Python hasn't changed since we generated it from blocks, restore the
+        // original workspace JSON snapshot (lossless round-trip).
+        const pythonUnchanged = pythonCode.trim() === pythonAtSnapshot.current.trim();
+        if (pythonUnchanged && workspaceSnapshot.current) {
           try {
-            // Resize workspace to fit new container dimensions
-            Blockly.svgResize(workspaceRef.current);
+            workspaceRef.current.clear();
+            Blockly.serialization.workspaces.load(workspaceSnapshot.current, workspaceRef.current);
+          } catch (e) {
+            console.error("Snapshot restore failed", e);
+          }
+          return;
+        }
 
-            console.log("Transpiling Python..."); // DEBUG
+        // Python was edited by the user — run the transpiler
+        if (pythonCode.trim()) {
+          try {
             const blocklyJson = pythonToBlockly(pythonCode);
-            console.log("Transpiler Result:", JSON.stringify(blocklyJson, null, 2)); // DEBUG
-
             if (blocklyJson.blocks.blocks.length > 0) {
-              console.log("Loading into Workspace..."); // DEBUG
-              // Disable events to prevent generating code during load
-              // (Although we want the final state to be generated, intermediate changes are noise)
-              // But wait, if we disable events, handleCodeChange won't fire.
-              // So pythonCode won't update? 
-              // We want pythonCode to match the workspace.
-              // Since pythonCode is ALREADY the source, we don't *need* an update yet.
-              // But cleaning might be good.
-
-              // Blockly.Events.disable(); 
               workspaceRef.current.clear();
               Blockly.serialization.workspaces.load(blocklyJson, workspaceRef.current);
-              // Blockly.Events.enable(); 
-
-              console.log("Workspace Loaded."); // DEBUG
-            } else {
-              console.warn("Transpiler returned 0 blocks."); // DEBUG
+              // Invalidate snapshot since workspace was rebuilt from edited Python
+              workspaceSnapshot.current = null;
+              pythonAtSnapshot.current = '';
             }
           } catch (e) {
-            console.error("Sync failed", e);
+            console.error("Transpile failed", e);
           }
         }
-      }, 50); // Small delay to allow Paint/Layout
+      }, 50);
 
     } else {
-      // Blocks -> Python: Ensure latest code is generated
+      // Blocks -> Python: save snapshot for lossless round-trip
       if (workspaceRef.current) {
         const generated = pythonGenerator.workspaceToCode(workspaceRef.current);
-        console.log("Generated Python from Blocks:", generated); // DEBUG
+        workspaceSnapshot.current = Blockly.serialization.workspaces.save(workspaceRef.current);
+        pythonAtSnapshot.current = generated;
         setPythonCode(generated);
       }
       setMode('python');
@@ -101,20 +118,38 @@ function App() {
   };
 
   const handleRun = async () => {
-    if (!code.trim()) {
+    let execCode = code;
+
+    // In Python mode: transpile current Python → blocks → JS first
+    if (mode === 'python' && pythonCode.trim() && workspaceRef.current) {
+      try {
+        const blocklyJson = pythonToBlockly(pythonCode);
+        if (blocklyJson.blocks.blocks.length > 0) {
+          workspaceRef.current.clear();
+          Blockly.serialization.workspaces.load(blocklyJson, workspaceRef.current);
+          execCode = javascriptGenerator.workspaceToCode(workspaceRef.current);
+          setCode(execCode);
+        }
+      } catch (e) {
+        console.warn('Python sync before run failed:', e);
+      }
+    }
+
+    if (!execCode.trim()) {
       setOutput(['// No code to run']);
       return;
     }
 
     setIsRunning(true);
     setOutput([]);
+    window.__running = true;
     if (window.spriteController) window.spriteController.reset();
 
     const logs = [];
     const originalConsoleLog = console.log;
     const originalConsoleError = console.error;
 
-    console.log = (...args) => {
+    console.log = (...args) => {  // eslint-disable-line no-console
       const message = args.map(arg =>
         typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
       ).join(' ');
@@ -134,7 +169,7 @@ function App() {
       const asyncCode = `
         return (async () => {
           try {
-            ${code}
+            ${execCode}
           } catch(e) {
             console.error(e);
           }
@@ -146,6 +181,7 @@ function App() {
       logs.push(`Execution Error: ${error.message}`);
       setOutput([...logs]);
     } finally {
+      window.__running = false;
       console.log = originalConsoleLog;
       console.error = originalConsoleError;
       setIsRunning(false);
@@ -153,6 +189,7 @@ function App() {
   };
 
   const handleClearOutput = () => {
+    window.__running = false;
     setOutput([]);
     if (window.spriteController) window.spriteController.reset();
   };
@@ -177,6 +214,7 @@ function App() {
     return localStorage.getItem('blockly-active-file') || 'default';
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const autosaveTimer = useRef(null);
 
   // Persistence Effects
   React.useEffect(() => {
@@ -228,19 +266,18 @@ function App() {
     loadWorkspaceState(file.content);
   };
 
-  const handleCreateFile = (parentId = null) => {
+  const handleCreateFile = (parentId = null, name = null) => {
     saveCurrentWorkspace();
     const newId = Date.now().toString();
     const newFile = {
       id: newId,
-      name: `Project ${files.filter(f => f.type === 'file').length + 1}`,
+      name: name || `Project ${files.filter(f => f.type === 'file').length + 1}`,
       content: null,
       type: 'file',
       parentId
     };
 
     setFiles(prev => {
-      // If parentId is provided, ensure parent folder is open
       if (parentId) {
         return [...prev.map(f => f.id === parentId ? { ...f, isOpen: true } : f), newFile];
       }
@@ -249,6 +286,7 @@ function App() {
 
     setActiveFileId(newId);
     if (workspaceRef.current) workspaceRef.current.clear();
+    return newId; // Return ID so AI agent can track it
   };
 
   const handleCreateFolder = (parentId = null) => {
@@ -364,7 +402,9 @@ function App() {
           const newFile = {
             id: newId,
             name: file.name.replace('.json', ''),
-            content: content
+            content: content,
+            type: 'file',
+            parentId: null
           };
 
           setFiles(prev => [...prev, newFile]);
@@ -395,19 +435,21 @@ function App() {
 
   const hasLoadedInitial = useRef(false);
 
-  // Custom code change handler wrapper
+  // Custom code change handler wrapper with debounced autosave
   const onWorkspaceChange = useCallback((workspace) => {
     handleCodeChange(workspace);
-    // Auto-save to state (could be debounced)
-    // For performance, maybe don't setFiles on every move.
-    // But strictly speaking persistence needs it.
-    // Let's rely on explicit save before actions for now, 
-    // BUT if user reloads page, they typically lose unsaved work if we don't save.
-    // Let's debounce save?
-
-    // actually, let's just save to localStorage on unmount/pagehide? 
-    // Or just save to the 'files' state on every change (debounced).
-  }, [handleCodeChange]);
+    // Debounced autosave: persist block state so page refresh doesn't lose work
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(() => {
+      if (!workspace) return;
+      try {
+        const state = Blockly.serialization.workspaces.save(workspace);
+        setFiles(prev => prev.map(f =>
+          f.id === activeFileId ? { ...f, content: state } : f
+        ));
+      } catch (e) { /* silent */ }
+    }, 800);
+  }, [handleCodeChange, activeFileId]);
 
 
   // Initialize workspace with active file content when workspace is ready
@@ -431,6 +473,17 @@ function App() {
 
 
 
+
+  const handleAILoadBlocks = useCallback((blocklyJson) => {
+    if (!workspaceRef.current) return;
+    try {
+      workspaceRef.current.clear();
+      Blockly.serialization.workspaces.load(blocklyJson, workspaceRef.current);
+      setMode('blocks');
+    } catch (e) {
+      console.error('AI block load failed:', e);
+    }
+  }, []);
 
   return (
     <div className="app-layout">
@@ -467,21 +520,58 @@ function App() {
                   <span>Python</span>
                 </button>
               </div>
-              {/* Export Button in Header? */}
-              <button
-                onClick={handleExport}
-                className="toggle-btn"
-                style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid #334155', color: '#94a3b8' }}
-                title="Export Current File"
-              >
-                💾 Save .json
-              </button>
+              <div className="editor-header-actions">
+                <button
+                  className={`tool-btn ${showAI ? 'active' : ''}`}
+                  onClick={() => setShowAI(v => !v)}
+                  title="AI Agent"
+                >
+                  ✨ AI
+                </button>
+                <button
+                  className={`tool-btn ${showLibraryManager ? 'active' : ''}`}
+                  onClick={() => setShowLibraryManager(v => !v)}
+                  title="Library Manager"
+                >
+                  📦 Libs
+                </button>
+                <button
+                  onClick={handleExport}
+                  className="tool-btn"
+                  title="Export Current File"
+                >
+                  💾 Save
+                </button>
+              </div>
             </div>
-            <div style={{ display: mode === 'blocks' ? 'block' : 'none', height: '100%' }}>
-              <BlocklyEditor onCodeChange={onWorkspaceChange} onMount={onMount} />
-            </div>
-            <div style={{ display: mode === 'python' ? 'block' : 'none', height: '100%' }}>
-              <PythonEditor code={pythonCode} onChange={setPythonCode} />
+            <div className="editor-body">
+              <div style={{ display: mode === 'blocks' ? 'flex' : 'none', height: '100%', flex: 1, minWidth: 0 }}>
+                <BlocklyEditor onCodeChange={onWorkspaceChange} onMount={onMount} toolboxVersion={toolboxVersion} />
+              </div>
+              <div style={{ display: mode === 'python' ? 'flex' : 'none', height: '100%', flex: 1, minWidth: 0 }}>
+                <PythonEditor code={pythonCode} onChange={setPythonCode} />
+              </div>
+              {showAI && (
+                <div className="ai-panel">
+                  <AIAgent
+                    onLoadBlocks={handleAILoadBlocks}
+                    currentPython={pythonCode}
+                    onClose={() => setShowAI(false)}
+                    files={files}
+                    onCreateFile={handleCreateFile}
+                    onSwitchFile={handleFileSelect}
+                  />
+                </div>
+              )}
+              {showLibraryManager && (
+                <div className="lib-panel">
+                  <LibraryManager
+                    workspace={workspaceRef.current}
+                    onClose={() => setShowLibraryManager(false)}
+                    onToolboxChange={() => setToolboxVersion(v => v + 1)}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -512,8 +602,8 @@ function App() {
             </div>
           </div>
         </main>
-      </div >
-    </div >
+      </div>
+    </div>
   );
 }
 

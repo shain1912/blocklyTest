@@ -130,3 +130,35 @@
     font-weight: 600;
     color: var(--primary);
 }
+
+/* Scratch-style variable monitors */
+.var-monitor {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    border-radius: 4px;
+    overflow: hidden;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    z-index: 20;
+    user-select: none;
+}
+
+.var-monitor-name {
+    background: #ff8c1a;
+    color: white;
+    padding: 3px 6px;
+    white-space: nowrap;
+    border-right: 1px solid rgba(0,0,0,0.15);
+}
+
+.var-monitor-value {
+    background: white;
+    color: #333;
+    padding: 3px 8px;
+    min-width: 28px;
+    text-align: center;
+    white-space: nowrap;
+}

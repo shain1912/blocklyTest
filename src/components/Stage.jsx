@@ -1,15 +1,17 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import './Stage.css';
 
 const Stage = ({ isRunning }) => {
+    const [variables, setVariables] = useState({}); // { name: { value, visible } }
     const [spriteState, setSpriteState] = useState({
         x: 0,
         y: 0,
         direction: 90,
         size: 100,
         visible: true,
-        talking: null, // text or null
-        thinking: null // text or null
+        talking: null,
+        thinking: null,
+        spriteType: 'cat'  // 'cat' | 'turtle' | 'arrow'
     });
 
     const spriteStateRef = useRef(spriteState);
@@ -17,6 +19,29 @@ const Stage = ({ isRunning }) => {
     const mousePos = useRef({ x: 0, y: 0 });
     const isMouseDown = useRef(false);
     const timerStart = useRef(Date.now());
+
+    // Pen drawing state
+    const drawingCanvasRef = useRef(null);
+    const isPenDown = useRef(false);
+    const penColor = useRef('#e11d48');
+    const penSize = useRef(2);
+
+    // Draw a line on the pen canvas (sprite coordinate space: center origin, Y-up)
+    const penDrawLine = useCallback((x1, y1, x2, y2) => {
+        const canvas = drawingCanvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
+        ctx.beginPath();
+        ctx.strokeStyle = penColor.current;
+        ctx.lineWidth = penSize.current;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.moveTo(cx + x1, cy - y1);
+        ctx.lineTo(cx + x2, cy - y2);
+        ctx.stroke();
+    }, []);
 
     // Update ref when state changes so controller can access latest state
     useEffect(() => {
@@ -59,15 +84,13 @@ const Stage = ({ isRunning }) => {
         // Expose controller to window for generated code to use
         window.spriteController = {
             move: async (steps) => {
-                console.log(`Moved ${steps} steps`);
-                setSpriteState(prev => {
-                    const rad = (prev.direction - 90) * (Math.PI / 180);
-                    return {
-                        ...prev,
-                        x: prev.x + Math.cos(rad) * steps,
-                        y: prev.y + Math.sin(rad) * steps
-                    };
-                });
+                const rad = (spriteStateRef.current.direction - 90) * (Math.PI / 180);
+                const oldX = spriteStateRef.current.x;
+                const oldY = spriteStateRef.current.y;
+                const newX = oldX + Math.cos(rad) * steps;
+                const newY = oldY + Math.sin(rad) * steps;
+                if (isPenDown.current) penDrawLine(oldX, oldY, newX, newY);
+                setSpriteState(prev => ({ ...prev, x: newX, y: newY }));
                 await new Promise(r => setTimeout(r, 16));
             },
             turn: async (degrees) => {
@@ -79,10 +102,12 @@ const Stage = ({ isRunning }) => {
                 await new Promise(r => setTimeout(r, 16));
             },
             setX: async (x) => {
+                if (isPenDown.current) penDrawLine(spriteStateRef.current.x, spriteStateRef.current.y, Number(x), spriteStateRef.current.y);
                 setSpriteState(prev => ({ ...prev, x: Number(x) }));
                 await new Promise(r => setTimeout(r, 16));
             },
             setY: async (y) => {
+                if (isPenDown.current) penDrawLine(spriteStateRef.current.x, spriteStateRef.current.y, spriteStateRef.current.x, Number(y));
                 setSpriteState(prev => ({ ...prev, y: Number(y) }));
                 await new Promise(r => setTimeout(r, 16));
             },
@@ -105,8 +130,76 @@ const Stage = ({ isRunning }) => {
                     setSpriteState(prev => ({ ...prev, thinking: null }));
                 }
             },
+            goTo: async (x, y) => {
+                if (isPenDown.current) penDrawLine(spriteStateRef.current.x, spriteStateRef.current.y, Number(x), Number(y));
+                setSpriteState(prev => ({ ...prev, x: Number(x), y: Number(y) }));
+                await new Promise(r => setTimeout(r, 16));
+            },
+            glide: async (seconds, x, y) => {
+                const start = { x: spriteStateRef.current.x, y: spriteStateRef.current.y };
+                const end = { x: Number(x), y: Number(y) };
+                const steps = Math.max(1, Math.round(seconds * 60));
+                let prevX = start.x, prevY = start.y;
+                for (let i = 1; i <= steps; i++) {
+                    const t = i / steps;
+                    const nx = start.x + (end.x - start.x) * t;
+                    const ny = start.y + (end.y - start.y) * t;
+                    if (isPenDown.current) penDrawLine(prevX, prevY, nx, ny);
+                    prevX = nx; prevY = ny;
+                    setSpriteState(prev => ({ ...prev, x: nx, y: ny }));
+                    await new Promise(r => setTimeout(r, (seconds * 1000) / steps));
+                }
+            },
+            changeX: async (dx) => {
+                const nx = spriteStateRef.current.x + Number(dx);
+                if (isPenDown.current) penDrawLine(spriteStateRef.current.x, spriteStateRef.current.y, nx, spriteStateRef.current.y);
+                setSpriteState(prev => ({ ...prev, x: nx }));
+                await new Promise(r => setTimeout(r, 16));
+            },
+            changeY: async (dy) => {
+                const ny = spriteStateRef.current.y + Number(dy);
+                if (isPenDown.current) penDrawLine(spriteStateRef.current.x, spriteStateRef.current.y, spriteStateRef.current.x, ny);
+                setSpriteState(prev => ({ ...prev, y: ny }));
+                await new Promise(r => setTimeout(r, 16));
+            },
+            setDirection: async (degrees) => {
+                setSpriteState(prev => ({ ...prev, direction: Number(degrees) }));
+                await new Promise(r => setTimeout(r, 16));
+            },
+            pointTowards: async (target) => {
+                if (target === 'mouse-pointer') {
+                    const dx = mousePos.current.x - spriteStateRef.current.x;
+                    const dy = mousePos.current.y - spriteStateRef.current.y;
+                    const angle = Math.atan2(dy, dx) * (180 / Math.PI) + 90;
+                    setSpriteState(prev => ({ ...prev, direction: angle }));
+                    await new Promise(r => setTimeout(r, 16));
+                }
+            },
+            ifOnEdgeBounce: async () => {
+                const stage = document.querySelector('.stage-canvas');
+                if (!stage) return;
+                const rect = stage.getBoundingClientRect();
+                const hw = rect.width / 2;
+                const hh = rect.height / 2;
+                const { x, y, direction } = spriteStateRef.current;
+                let newDir = direction;
+                let newX = x;
+                let newY = y;
+                if (x > hw - 50) { newX = hw - 50; if (Math.cos((direction - 90) * Math.PI / 180) > 0) newDir = 180 - direction; }
+                if (x < -(hw - 50)) { newX = -(hw - 50); if (Math.cos((direction - 90) * Math.PI / 180) < 0) newDir = 180 - direction; }
+                if (y > hh - 50) { newY = hh - 50; if (Math.sin((direction - 90) * Math.PI / 180) > 0) newDir = -direction; }
+                if (y < -(hh - 50)) { newY = -(hh - 50); if (Math.sin((direction - 90) * Math.PI / 180) < 0) newDir = -direction; }
+                setSpriteState(prev => ({ ...prev, x: newX, y: newY, direction: newDir }));
+                await new Promise(r => setTimeout(r, 16));
+            },
             switchCostume: async (costume) => { console.log('Costume switched to', costume); },
             nextCostume: async () => { console.log('Next costume'); },
+
+            // Volume (visual stub - no actual audio volume API cross-browser easily)
+            setVolume: async (vol) => { console.log(`Volume set to ${vol}`); },
+            changeVolume: async (amount) => { console.log(`Volume changed by ${amount}`); },
+            getVolume: async () => 100,
+            stopAllSounds: async () => { console.log('All sounds stopped'); },
 
             playSound: async (soundName) => {
                 console.log(`Playing sound: "${soundName}"`);
@@ -185,10 +278,50 @@ const Stage = ({ isRunning }) => {
                 if (attr === 'y') window.spriteController.setY(val);
             },
 
+            // ── Sprite appearance ────────────────────────────────────────
+            setSpriteType: (type) => {
+                setSpriteState(prev => ({ ...prev, spriteType: type }));
+            },
+
+            // ── Variable monitors ────────────────────────────────────────
+            setVariable: (name, value) => {
+                setVariables(prev => ({
+                    ...prev,
+                    [name]: { value, visible: prev[name]?.visible !== false }
+                }));
+            },
+            showVariable: (name) => {
+                setVariables(prev => ({
+                    ...prev,
+                    [name]: { ...(prev[name] || { value: 0 }), visible: true }
+                }));
+            },
+            hideVariable: (name) => {
+                setVariables(prev => ({
+                    ...prev,
+                    [name]: { ...(prev[name] || { value: 0 }), visible: false }
+                }));
+            },
+
+            // ── Pen controls ────────────────────────────────────────────
+            penDown: () => { isPenDown.current = true; },
+            penUp:   () => { isPenDown.current = false; },
+            setPenColor: (color) => { penColor.current = color; },
+            setPenSize:  (size)  => { penSize.current = Number(size); },
+            clearPen: () => {
+                const canvas = drawingCanvasRef.current;
+                if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+            },
+
             reset: () => {
                 setSpriteState({
-                    x: 0, y: 0, direction: 90, size: 100, visible: true, talking: null, thinking: null
+                    x: 0, y: 0, direction: 90, size: 100, visible: true,
+                    talking: null, thinking: null, spriteType: 'cat'
                 });
+                setVariables({});
+                isPenDown.current = false;
+                const canvas = drawingCanvasRef.current;
+                if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
                 timerStart.current = Date.now();
             }
         };
@@ -198,39 +331,107 @@ const Stage = ({ isRunning }) => {
         };
     }, []);
 
+    // Keep drawing canvas sized to its container
+    const stageCanvasRef = useRef(null);
+    useEffect(() => {
+        const container = stageCanvasRef.current;
+        if (!container) return;
+        const sync = () => {
+            const canvas = drawingCanvasRef.current;
+            if (!canvas) return;
+            canvas.width  = container.clientWidth;
+            canvas.height = container.clientHeight;
+        };
+        sync();
+        const ro = new ResizeObserver(sync);
+        ro.observe(container);
+        return () => ro.disconnect();
+    }, []);
+
     return (
         <div className="stage-container">
             <div className="stage-header">
                 <h2>Stage</h2>
                 <div className="stage-controls">
-                    <button className="icon-btn" title="Grid">#</button>
-                    <button className="icon-btn" title="Fullscreen">⛶</button>
+                    <button className="icon-btn" title="Clear drawing" onClick={() => {
+                        const canvas = drawingCanvasRef.current;
+                        if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+                    }}>🗑</button>
                 </div>
             </div>
-            <div className="stage-canvas">
+            <div className="stage-canvas" ref={stageCanvasRef}>
+                {/* Pen drawing layer — fixed to stage, NOT inside sprite */}
+                <canvas
+                    ref={drawingCanvasRef}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 1 }}
+                />
+
+                {/* Variable Monitors (Scratch-style) */}
+                {Object.entries(variables)
+                    .filter(([, v]) => v.visible)
+                    .map(([name, v], i) => (
+                        <div key={name} className="var-monitor" style={{ top: 8 + i * 36, left: 8 }}>
+                            <span className="var-monitor-name">{name}</span>
+                            <span className="var-monitor-value">{
+                                typeof v.value === 'number'
+                                    ? (Number.isInteger(v.value) ? v.value : parseFloat(v.value.toFixed(2)))
+                                    : String(v.value)
+                            }</span>
+                        </div>
+                    ))
+                }
+
                 {spriteState.visible && (
                     <div
                         className="sprite"
                         style={{
                             transform: `translate(${spriteState.x}px, ${-spriteState.y}px) rotate(${spriteState.direction - 90}deg) scale(${spriteState.size / 100})`,
+                            zIndex: 2,
                         }}
                     >
                         <div className="sprite-image">
-                            {/* Simple Cat SVG */}
-                            <svg width="100" height="100" viewBox="0 0 100 100">
-                                <path d="M50 20 Q60 5 70 20 Q80 10 85 25 Q95 30 90 50 Q95 70 80 80 Q60 90 40 80 Q25 80 20 60 Q10 50 20 40 Q15 25 30 20 Q40 5 50 20 Z" fill="#ffb703" stroke="#fb8500" strokeWidth="3" />
-                                <circle cx="40" cy="40" r="5" fill="black" />
-                                <circle cx="70" cy="40" r="5" fill="black" />
-                                <path d="M50 50 Q60 60 70 50" fill="none" stroke="black" strokeWidth="3" />
-                                <path d="M20 50 L5 45 M20 55 L5 60 M90 50 L105 45 M90 55 L105 60" stroke="black" strokeWidth="2" />
-                            </svg>
+                            {spriteState.spriteType === 'turtle' ? (
+                                /* Top-down turtle SVG facing right */
+                                <svg width="60" height="60" viewBox="0 0 60 60">
+                                    {/* Legs */}
+                                    <ellipse cx="14" cy="14" rx="7" ry="5" fill="#4a8c3a" stroke="#2a5c1a" strokeWidth="1.5" transform="rotate(-35,14,14)"/>
+                                    <ellipse cx="46" cy="14" rx="7" ry="5" fill="#4a8c3a" stroke="#2a5c1a" strokeWidth="1.5" transform="rotate(35,46,14)"/>
+                                    <ellipse cx="14" cy="46" rx="7" ry="5" fill="#4a8c3a" stroke="#2a5c1a" strokeWidth="1.5" transform="rotate(35,14,46)"/>
+                                    <ellipse cx="46" cy="46" rx="7" ry="5" fill="#4a8c3a" stroke="#2a5c1a" strokeWidth="1.5" transform="rotate(-35,46,46)"/>
+                                    {/* Shell */}
+                                    <circle cx="30" cy="30" r="16" fill="#5aaa3a" stroke="#2a5c1a" strokeWidth="2"/>
+                                    <ellipse cx="30" cy="30" rx="9" ry="9" fill="#3a8a2a" opacity="0.6"/>
+                                    <line x1="30" y1="14" x2="30" y2="46" stroke="#2a5c1a" strokeWidth="1" opacity="0.5"/>
+                                    <line x1="14" y1="30" x2="46" y2="30" stroke="#2a5c1a" strokeWidth="1" opacity="0.5"/>
+                                    {/* Tail */}
+                                    <ellipse cx="8" cy="30" rx="5" ry="3" fill="#4a8c3a" stroke="#2a5c1a" strokeWidth="1.5"/>
+                                    {/* Head — points RIGHT (direction=90) */}
+                                    <circle cx="50" cy="30" r="8" fill="#6aaa4a" stroke="#2a5c1a" strokeWidth="1.5"/>
+                                    <circle cx="53" cy="27" r="2" fill="#222"/>
+                                    <circle cx="53" cy="33" r="2" fill="#222"/>
+                                </svg>
+                            ) : spriteState.spriteType === 'arrow' ? (
+                                /* Simple arrow cursor */
+                                <svg width="40" height="40" viewBox="0 0 40 40">
+                                    <polygon points="20,2 38,38 20,28 2,38" fill="#333" stroke="#fff" strokeWidth="2"/>
+                                </svg>
+                            ) : (
+                                /* Default cat SVG */
+                                <svg width="100" height="100" viewBox="0 0 100 100">
+                                    <path d="M50 20 Q60 5 70 20 Q80 10 85 25 Q95 30 90 50 Q95 70 80 80 Q60 90 40 80 Q25 80 20 60 Q10 50 20 40 Q15 25 30 20 Q40 5 50 20 Z" fill="#ffb703" stroke="#fb8500" strokeWidth="3" />
+                                    <circle cx="40" cy="40" r="5" fill="black" />
+                                    <circle cx="70" cy="40" r="5" fill="black" />
+                                    <path d="M50 50 Q60 60 70 50" fill="none" stroke="black" strokeWidth="3" />
+                                    <path d="M20 50 L5 45 M20 55 L5 60 M90 50 L105 45 M90 55 L105 60" stroke="black" strokeWidth="2" />
+                                </svg>
+                            )}
                         </div>
 
-                        {/* Bubble */}
+                        {/* Speech/think bubble */}
                         {(spriteState.talking || spriteState.thinking) && (
                             <div
                                 className={`bubble ${spriteState.thinking ? 'think' : 'say'}`}
-                                style={{ transform: `rotate(${-(spriteState.direction - 90)}deg)` }} // Counter-rotate bubble
+                                style={{ transform: `rotate(${-(spriteState.direction - 90)}deg)` }}
                             >
                                 {spriteState.talking || spriteState.thinking}
                             </div>
