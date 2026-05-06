@@ -16,10 +16,19 @@ const BlocklyEditor = ({ onCodeChange, onMount, toolboxVersion }) => {
 
   // Dynamic toolbox update when libraries are installed/uninstalled
   useEffect(() => {
-    if (!workspace.current || toolboxVersion === undefined) return;
+    if (!workspace.current || toolboxVersion === undefined || toolboxVersion === 0) return;
     try {
       workspace.current.updateToolbox(getFullToolboxConfig());
-    } catch (e) { console.warn('Toolbox update failed:', e); }
+      // Try to make the newly added last category visible/selected
+      const toolbox = workspace.current.getToolbox();
+      if (toolbox) {
+        const contents = toolbox.getToolboxItems?.() || [];
+        if (contents.length > 0) {
+          const last = contents[contents.length - 1];
+          if (last && last.setSelected) last.setSelected(true);
+        }
+      }
+    } catch (e) { /* toolbox API varies by Blockly version */ }
   }, [toolboxVersion]);
 
   useEffect(() => {

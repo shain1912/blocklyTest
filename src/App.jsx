@@ -28,6 +28,34 @@ import { SPRITE_DSL_PACKAGE } from './utils/spriteDslSchemas';
 // Idempotent: installLibrary skips re-defining blocks that already exist.
 try { installLibrary(SPRITE_DSL_PACKAGE); } catch (e) { /* swallow at boot */ }
 
+const SPRITE_SHIM = `# sprite/stage shim — mirrors the block-mode API so Python runs don't crash
+class _SpriteProxy:
+    def move(self, steps=10): print(f"sprite.move({steps})")
+    def turn_right(self, degrees=15): print(f"sprite.turn_right({degrees})")
+    def turn_left(self, degrees=15): print(f"sprite.turn_left({degrees})")
+    def go_to(self, x=0, y=0): print(f"sprite.go_to({x}, {y})")
+    def set_x(self, x=0): print(f"sprite.set_x({x})")
+    def set_y(self, y=0): print(f"sprite.set_y({y})")
+    def change_x(self, dx=0): print(f"sprite.change_x({dx})")
+    def change_y(self, dy=0): print(f"sprite.change_y({dy})")
+    def say(self, text='', secs=2): print(f"sprite says: {text}")
+    def think(self, text='', secs=2): print(f"sprite thinks: {text}")
+    def show(self): print("sprite.show()")
+    def hide(self): print("sprite.hide()")
+    def set_size(self, pct=100): print(f"sprite.set_size({pct}%)")
+    def change_size(self, dpct=10): print(f"sprite.change_size({dpct}%)")
+    def set_costume(self, name): print(f"sprite.set_costume('{name}')")
+    def next_costume(self): print("sprite.next_costume()")
+    def play_sound(self, name): print(f"sprite.play_sound('{name}')")
+    def __repr__(self): return '<Sprite>'
+class _StageProxy:
+    def set_backdrop(self, name): print(f"stage.set_backdrop('{name}')")
+    def next_backdrop(self): print("stage.next_backdrop()")
+    def __repr__(self): return '<Stage>'
+sprite = _SpriteProxy()
+stage = _StageProxy()
+`;
+
 // `?test=1` strips chrome (file explorer, AI/Lib/Snippet panels) and disables
 // CSS transitions so Playwright can drive the editor deterministically.
 const TEST_MODE = typeof window !== 'undefined'
@@ -63,8 +91,9 @@ function App() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Generate code only from hat blocks (on_start / on_forever) if present,
-  // otherwise fall back to all blocks (backward compat).
+  // Generate code only from hat blocks (on_start / on_forever / when_flag_clicked).
+  // Floating blocks without a hat are intentionally excluded — they should not
+  // execute in random order. Returns empty strings when no hat blocks exist.
   const generateCodeFromWorkspace = useCallback((workspace) => {
     const HAT_TYPES = ['on_start', 'on_forever', 'when_flag_clicked'];
     const topBlocks = workspace.getTopBlocks(false);
@@ -75,10 +104,7 @@ function App() {
       const pyCode = hatBlocks.map(b => pythonGenerator.blockToCode(b)).join('\n');
       return { jsCode, pyCode };
     }
-    return {
-      jsCode: javascriptGenerator.workspaceToCode(workspace),
-      pyCode: pythonGenerator.workspaceToCode(workspace),
-    };
+    return { jsCode: '', pyCode: '' };
   }, []);
 
   /* Updated Code Change Handler */
@@ -189,7 +215,7 @@ function App() {
           setTimeout(() => {
             programmaticLoadRef.current = false;
             blocksTouchedRef.current = false;
-          }, 150);
+          }, 600);
         }
       })();
       return;
@@ -234,8 +260,15 @@ function App() {
   const handleRun = async () => {
     // Python mode → real CPython via backend
     if (mode === 'python') {
-      const pyToRun = pythonCode.trim();
-      if (!pyToRun) { setOutput(['// No Python code to run']); return; }
+      // Use the ref (synchronously updated by __setPython and the editor's onChange)
+      // rather than the `pythonCode` state, which may be one render behind due to
+      // React batching — particularly relevant in Playwright tests where the run
+      // button is clicked shortly after a programmatic __setPython call.
+      const rawPy = (pythonRawRef.current || pythonCode).trim();
+      const pyToRun = (rawPy.includes('sprite') || rawPy.includes('stage'))
+        ? SPRITE_SHIM + '\n' + rawPy
+        : rawPy;
+      if (!rawPy) { setOutput(['// No Python code to run']); return; }
 
       setIsRunning(true);
       setStreamlitUrl(null);
@@ -285,7 +318,13 @@ function App() {
 
     // Blocks mode → existing JS execution path
     let execCode = code;
-    if (!execCode.trim()) { setOutput(['// No code to run']); return; }
+    if (!execCode.trim()) {
+      const hasAnyBlocks = workspaceRef.current?.getTopBlocks(false).length > 0;
+      setOutput([hasAnyBlocks
+        ? '// 실행할 항목이 없습니다. "시작하면" 블럭을 추가하고 함수/클래스를 호출해주세요.'
+        : '// 블럭이 없습니다. "시작하면" 블럭을 추가해주세요.']);
+      return;
+    }
 
     setIsRunning(true);
     setOutput([]);
@@ -383,30 +422,41 @@ function App() {
     localStorage.setItem('blockly-active-file', activeFileId);
   }, [activeFileId]);
 
-  // Save current workspace state to file object
+  // Save current workspace state to file object (Blockly blocks + Python code)
   const saveCurrentWorkspace = useCallback(() => {
     if (!workspaceRef.current) return;
     try {
-      const state = Blockly.serialization.workspaces.save(workspaceRef.current);
+      const blocksState = Blockly.serialization.workspaces.save(workspaceRef.current);
+      const pythonState = pythonRawRef.current || '';
+      const state = { blocks: blocksState, python: pythonState };
       setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, content: state } : f));
     } catch (e) {
       console.error("Failed to save workspace", e);
     }
   }, [activeFileId]);
 
-  // Load state into workspace
+  // Load state into workspace (Blockly blocks + Python code)
   const loadWorkspaceState = useCallback((state) => {
     if (!workspaceRef.current) return;
     try {
-      if (state) {
-        Blockly.serialization.workspaces.load(state, workspaceRef.current);
+      // Support both new format { blocks, python } and legacy plain Blockly JSON
+      const blocksState = state?.blocks ?? state;
+      const pythonState = state?.python ?? '';
+      if (blocksState) {
+        Blockly.serialization.workspaces.load(blocksState, workspaceRef.current);
       } else {
         workspaceRef.current.clear();
       }
+      // Restore Python content for this file
+      pythonRawRef.current = pythonState;
+      setPythonCode(pythonState);
     } catch (e) {
       console.error("Failed to load workspace", e);
     }
   }, []);
+
+  // Also clear Python content when creating a new file
+  // (handled inline in handleCreateFile below)
 
   // --- File Actions ---
 
@@ -444,6 +494,9 @@ function App() {
 
     setActiveFileId(newId);
     if (workspaceRef.current) workspaceRef.current.clear();
+    // Clear Python editor content for the new empty file
+    pythonRawRef.current = '';
+    setPythonCode('');
     return newId; // Return ID so AI agent can track it
   };
 
@@ -807,16 +860,39 @@ function App() {
     };
     window.__isRunning = () => isRunning;
     window.__isTestMode = () => TEST_MODE;
+    // File management helpers for E2E tests
+    window.__createFile = (parentId = null) => handleCreateFile(parentId);
+    window.__selectFile = (fileId) => handleFileSelect(fileId);
+    window.__getFiles = () => files.slice();
+    window.__getActiveFileId = () => activeFileId;
   }); // intentionally no deps — re-bind every render to keep closures fresh
 
   const handleAILoadBlocks = useCallback((blocklyJson) => {
     if (!workspaceRef.current) return;
     try {
+      programmaticLoadRef.current = true;
       workspaceRef.current.clear();
       Blockly.serialization.workspaces.load(blocklyJson, workspaceRef.current);
+      // Ensure loaded blocks are wrapped in on_start so Run works immediately.
+      const HAT_TYPES = ['on_start', 'on_forever', 'when_flag_clicked'];
+      const top = workspaceRef.current.getTopBlocks(false);
+      const hasHat = top.some(b => HAT_TYPES.includes(b.type));
+      if (!hasHat && top.length > 0) {
+        const hat = workspaceRef.current.newBlock('on_start');
+        hat.initSvg();
+        hat.render();
+        const firstStatement = top.find(b => b.previousConnection || b.nextConnection || b.outputConnection === null);
+        if (firstStatement && hat.getInput('DO')) {
+          try { hat.getInput('DO').connection.connect(firstStatement.previousConnection || firstStatement.nextConnection); } catch {}
+        }
+        hat.moveBy(20, 20);
+      }
       setMode('blocks');
+      blocksTouchedRef.current = false;
+      setTimeout(() => { programmaticLoadRef.current = false; blocksTouchedRef.current = false; }, 600);
     } catch (e) {
       console.error('AI block load failed:', e);
+      programmaticLoadRef.current = false;
     }
   }, []);
 
@@ -894,21 +970,21 @@ function App() {
                 <div className="editor-header-actions">
                   <button
                     className={`tool-btn ${showAI ? 'active' : ''}`}
-                    onClick={() => setShowAI(v => !v)}
+                    onClick={() => { setShowAI(v => !v); setShowLibraryManager(false); setShowSnippets(false); }}
                     title="AI Agent"
                   >
                     ✨ AI
                   </button>
                   <button
                     className={`tool-btn ${showLibraryManager ? 'active' : ''}`}
-                    onClick={() => setShowLibraryManager(v => !v)}
+                    onClick={() => { setShowLibraryManager(v => !v); setShowAI(false); setShowSnippets(false); }}
                     title="Library Manager"
                   >
                     📦 Libs
                   </button>
                   <button
                     className={`tool-btn ${showSnippets ? 'active' : ''}`}
-                    onClick={() => setShowSnippets(v => !v)}
+                    onClick={() => { setShowSnippets(v => !v); setShowAI(false); setShowLibraryManager(false); }}
                     title="One-click Python Snippets"
                     data-testid="snippets-toggle"
                   >
@@ -930,6 +1006,7 @@ function App() {
               </div>
               <div data-testid="python-pane" style={{ display: mode === 'python' ? 'flex' : 'none', height: '100%', flex: 1, minWidth: 0 }}>
                 <PythonEditor
+                  key={activeFileId}
                   code={pythonCode}
                   onChange={(val) => {
                     setPythonCode(val);

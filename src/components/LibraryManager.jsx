@@ -38,7 +38,7 @@ const LibraryManager = ({ workspace, onClose, onToolboxChange }) => {
     try {
       const pkg = JSON.parse(installText.trim());
       installLibrary(pkg);
-      setInstallSuccess(`✅ "${pkg.name}" v${pkg.version} installed! Reload the page to see new blocks in toolbox.`);
+      setInstallSuccess(`✅ "${pkg.name}" v${pkg.version} 설치 완료! 왼쪽 툴박스에서 새 블럭을 확인하세요.`);
       setInstallText('');
       refresh();
       if (onToolboxChange) onToolboxChange();
