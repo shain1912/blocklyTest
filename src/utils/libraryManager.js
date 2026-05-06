@@ -57,13 +57,78 @@ const _registerReversePatterns = (pkg) => {
 // ── Serialize/Deserialize ─────────────────────────────────────────────────────
 
 export const getInstalledLibraries = () => {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-  } catch { return []; }
+  // Persisted user-installed libraries plus any in-memory builtins (sprite
+  // DSL etc.) so the schema registry can see both. Builtins are filtered
+  // out of the public-facing list when the caller asks for "what the user
+  // installed" — but the schema registry walks them all.
+  let persisted = [];
+  try { persisted = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch {}
+  const builtins = Array.from(_runtimeBuiltins?.values?.() || []);
+  return [...persisted, ...builtins];
 };
+
+/** Public-facing list (UI / E2E tests) — excludes `__builtin_*` packages. */
+export const getUserInstalledLibraries = () =>
+  getInstalledLibraries().filter(l => !String(l.name).startsWith('__builtin_'));
 
 const saveLibraries = (libs) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(libs));
+};
+
+// ── Normalize AI-generated package format ────────────────────────────────────
+
+// autoBlockGen uses inp.type; BUILTIN_LIBRARY_TEMPLATES use inp.kind. Accept both.
+// autoBlockGen also puts fields inside "value" inputs — flatten them to dummy inputs.
+const _normalizeInputs = (inputs) => {
+  if (!inputs) return [];
+  const result = [];
+  for (const inp of inputs) {
+    const kind = inp.kind || inp.type || 'dummy';
+    if (kind === 'dummy') {
+      const fields = [];
+      if (inp.label) fields.push({ type: 'label', label: inp.label });
+      (inp.fields || []).forEach(f => fields.push({
+        ...f, type: f.type === 'text' ? 'text_input' : f.type
+      }));
+      result.push({ kind: 'dummy', fields });
+    } else if (kind === 'value') {
+      if (inp.fields && inp.fields.length > 0) {
+        // Inline fields in a value slot → render as dummy input with fields
+        const fields = [];
+        if (inp.label) fields.push({ type: 'label', label: inp.label });
+        inp.fields.forEach(f => fields.push({
+          ...f, type: f.type === 'text' ? 'text_input' : f.type
+        }));
+        result.push({ kind: 'dummy', fields });
+      } else {
+        result.push({ kind: 'value', name: inp.name || 'VALUE', label: inp.label });
+      }
+    } else if (kind === 'statement') {
+      result.push({ kind: 'statement', name: inp.name || 'STACK', label: inp.label });
+    }
+  }
+  return result;
+};
+
+// autoBlockGen generates template strings like "lib.method({FIELD})\n".
+// installLibrary needs JS function bodies like "const F=block.getFieldValue('FIELD'); return `lib.method(${F})\n`;"
+const _normalizeGenerator = (gen) => {
+  if (!gen) return null;
+  // Replace literal newlines inside string literals with \n escape sequences
+  // AI sometimes generates: return 'code()\n'; where \n is a real newline, breaking new Function()
+  const sanitized = gen.replace(/\r?\n/g, '\\n');
+  if (sanitized.includes('return ') || sanitized.includes('block.getFieldValue')) return sanitized;
+  // Template format: extract {FIELD_NAME} placeholders
+  const fieldNames = [];
+  const re = /\{(\w+)\}/g;
+  let m;
+  while ((m = re.exec(sanitized)) !== null) {
+    if (!fieldNames.includes(m[1])) fieldNames.push(m[1]);
+  }
+  if (fieldNames.length === 0) return `return ${JSON.stringify(sanitized)};`;
+  const decls = fieldNames.map(n => `const ${n}=block.getFieldValue('${n}');`).join(' ');
+  const tmpl = sanitized.replace(/\{(\w+)\}/g, '${$1}');
+  return `${decls} return \`${tmpl}\`;`;
 };
 
 // ── Install ───────────────────────────────────────────────────────────────────
@@ -72,85 +137,155 @@ export const installLibrary = (pkg) => {
   if (!pkg || !pkg.name || !pkg.blocks) throw new Error('Invalid library package: missing name or blocks');
 
   pkg.blocks.forEach(blockDef => {
-    if (Blockly.Blocks[blockDef.type]) return;
+    // Register block shape only if not already defined
+    if (!Blockly.Blocks[blockDef.type]) {
+      const normalizedInputs = _normalizeInputs(blockDef.inputs);
+      const isValueBlock = blockDef.output || blockDef.isStatement === false;
 
-    Blockly.Blocks[blockDef.type] = {
-      init: function () {
-        const block = this;
-        block.setColour(blockDef.colour || '#555');
-        block.setTooltip(blockDef.tooltip || '');
+      Blockly.Blocks[blockDef.type] = {
+        init: function () {
+          const block = this;
+          block.setColour(blockDef.colour || '#555');
+          block.setTooltip(blockDef.tooltip || '');
 
-        (blockDef.inputs || []).forEach(inp => {
-          if (inp.kind === 'dummy') {
-            const di = block.appendDummyInput();
-            (inp.fields || []).forEach(f => {
-              if (f.type === 'text_input') di.appendField(new Blockly.FieldTextInput(f.default || ''), f.name);
-              else if (f.type === 'dropdown') di.appendField(new Blockly.FieldDropdown(f.options), f.name);
-              else if (f.type === 'number') di.appendField(new Blockly.FieldNumber(f.default ?? 0), f.name);
-              else di.appendField(String(f.label || ''));
-            });
-          } else if (inp.kind === 'statement') {
-            const si = block.appendStatementInput(inp.name).setCheck(null);
-            if (inp.label) si.appendField(inp.label);
-          } else if (inp.kind === 'value') {
-            const vi = block.appendValueInput(inp.name).setCheck(null);
-            if (inp.label) vi.appendField(inp.label);
+          normalizedInputs.forEach(inp => {
+            if (inp.kind === 'dummy') {
+              const di = block.appendDummyInput();
+              (inp.fields || []).forEach(f => {
+                if (f.type === 'text_input') di.appendField(new Blockly.FieldTextInput(String(f.default ?? '')), f.name);
+                else if (f.type === 'dropdown') di.appendField(new Blockly.FieldDropdown(f.options), f.name);
+                else if (f.type === 'number') di.appendField(new Blockly.FieldNumber(f.default ?? 0), f.name);
+                else if (f.name) di.appendField(new Blockly.FieldTextInput(String(f.default ?? '')), f.name);
+                else di.appendField(String(f.label || ''));
+              });
+            } else if (inp.kind === 'statement') {
+              const si = block.appendStatementInput(inp.name).setCheck(null);
+              if (inp.label) si.appendField(inp.label);
+            } else if (inp.kind === 'value') {
+              const vi = block.appendValueInput(inp.name).setCheck(null);
+              if (inp.label) vi.appendField(inp.label);
+            }
+          });
+
+          if (isValueBlock) { block.setOutput(true, null); }
+          else {
+            if (blockDef.previousStatement !== false) block.setPreviousStatement(true, null);
+            if (blockDef.nextStatement !== false) block.setNextStatement(true, null);
           }
-        });
-
-        if (blockDef.output) { block.setOutput(true, null); }
-        else {
-          if (blockDef.previousStatement !== false) block.setPreviousStatement(true, null);
-          if (blockDef.nextStatement !== false) block.setNextStatement(true, null);
         }
-      }
-    };
+      };
+    }
 
-    const jsGen = pkg.generators?.js?.[blockDef.type];
-    const pyGen = pkg.generators?.python?.[blockDef.type];
+    // Always (re-)register generators — they live in memory and are lost on page reload
+    const jsGenRaw = pkg.generators?.js?.[blockDef.type];
+    const pyGenRaw = pkg.generators?.python?.[blockDef.type];
+    const jsGen = _normalizeGenerator(jsGenRaw);
+    const pyGen = _normalizeGenerator(pyGenRaw) ?? "return '';";
     // eslint-disable-next-line no-new-func
-    if (jsGen) javascriptGenerator.forBlock[blockDef.type] = new Function('block', 'javascriptGenerator', jsGen);
+    if (jsGen) try { javascriptGenerator.forBlock[blockDef.type] = new Function('block', 'javascriptGenerator', jsGen); } catch (e) { console.warn(`JS gen error for ${blockDef.type}:`, e); }
     // eslint-disable-next-line no-new-func
-    if (pyGen) pythonGenerator.forBlock[blockDef.type] = new Function('block', 'pythonGenerator', pyGen);
+    try {
+      pythonGenerator.forBlock[blockDef.type] = new Function('block', 'pythonGenerator', pyGen);
+    } catch (e) {
+      console.warn(`Py gen failed for ${blockDef.type}:`, e.message);
+      pythonGenerator.forBlock[blockDef.type] = () => '';
+    }
   });
 
   _registerReversePatterns(pkg);
 
-  const existing = getInstalledLibraries();
-  const idx = existing.findIndex(l => l.name === pkg.name);
+  // `__builtin_*` packages go to the in-memory registry only — never to
+  // localStorage and never to the user-facing Library Manager. Real user
+  // libraries persist; getInstalledLibraries returns persisted + builtins.
   const entry = { name: pkg.name, version: pkg.version || '1.0.0', description: pkg.description || '', author: pkg.author || '', installedAt: new Date().toISOString(), pkg };
-  if (idx >= 0) existing[idx] = entry; else existing.push(entry);
-  saveLibraries(existing);
+  if (String(pkg.name).startsWith('__builtin_')) {
+    _runtimeBuiltins.set(pkg.name, entry);
+  } else {
+    const persisted = _readPersisted();
+    const idx = persisted.findIndex(l => l.name === pkg.name);
+    if (idx >= 0) persisted[idx] = entry; else persisted.push(entry);
+    saveLibraries(persisted);
+  }
+
+  // Schema registry must be rebuilt so the new library's calls are resolvable
+  // on the next Python→Blocks conversion.
+  _notifySchemaRegistry();
   return entry;
+};
+
+// In-memory registry for `__builtin_*` packages so they're available to the
+// schema registry without leaking into localStorage / the UI.
+const _runtimeBuiltins = new Map();
+const _readPersisted = () => {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+  catch { return []; }
+};
+
+/** Lazily-loaded callback so we don't force a circular import at module eval. */
+let _schemaInvalidator = null;
+const _notifySchemaRegistry = () => {
+  if (_schemaInvalidator) { try { _schemaInvalidator(); } catch {} return; }
+  // Dynamically import to avoid a cycle (schema registry imports getInstalledLibraries)
+  import('./librarySchemaRegistry').then(m => {
+    _schemaInvalidator = m.invalidateSchemaRegistry;
+    _schemaInvalidator();
+  }).catch(() => {});
 };
 
 // ── Uninstall ─────────────────────────────────────────────────────────────────
 
 export const uninstallLibrary = (name) => {
   saveLibraries(getInstalledLibraries().filter(l => l.name !== name));
+  _notifySchemaRegistry();
 };
 
 // ── Restore on boot ───────────────────────────────────────────────────────────
 
 export const restoreLibraries = () => {
-  const libs = getInstalledLibraries();
-  libs.forEach(entry => {
+  // Skip `__builtin_*` packages — those are re-installed by their owning
+  // module at startup (e.g. spriteDslSchemas via App.jsx) and should never
+  // be persisted. If old localStorage from a prior version still holds one,
+  // strip it on the first restore and write the cleaned list back.
+  const userLibs = getInstalledLibraries()
+    .filter(e => !String(e?.pkg?.name || '').startsWith('__builtin_'));
+  saveLibraries(userLibs.map(e => ({
+    name: e.name, version: e.version, description: e.description,
+    author: e.author, installedAt: e.installedAt, pkg: e.pkg,
+  })));
+  userLibs.forEach(entry => {
     try { installLibrary(entry.pkg); } catch (e) { console.warn(`Failed to restore "${entry.name}":`, e); }
   });
-  return libs;
+  return userLibs;
 };
 
 // ── Dynamic toolbox categories for installed libraries ────────────────────────
 
-export const buildLibraryToolboxCategories = () =>
-  getInstalledLibraries().map(entry =>
-    entry.pkg.toolboxCategory || {
+/**
+ * Build the list of toolbox categories for the currently-installed libraries.
+ * Two cleanups vs the naive map:
+ *   1. `__builtin_*` packages (sprite-dsl, future stdlib bridges) live in the
+ *      schema registry only — they don't get a toolbox of their own. Their
+ *      blocks already live in curated categories (Motion / Looks / etc.).
+ *   2. Dedupe by visible category NAME so installing the same library twice
+ *      (e.g. OpenCV via snippet + AI-generated opencv-python) doesn't render
+ *      "OpenCV" three times in the side panel. Last-install wins.
+ */
+export const buildLibraryToolboxCategories = () => {
+  const byName = new Map();
+  for (const entry of getInstalledLibraries()) {
+    const pkg = entry.pkg || {};
+    if (String(pkg.name || '').startsWith('__builtin_')) continue;
+
+    const cat = pkg.toolboxCategory || {
       kind: 'category',
-      name: `📦 ${entry.pkg.name}`,
-      colour: entry.pkg.colour || '#555',
-      contents: (entry.pkg.blocks || []).map(b => ({ kind: 'block', type: b.type }))
-    }
-  );
+      name: `📦 ${pkg.name}`,
+      colour: pkg.colour || '#555',
+      contents: (pkg.blocks || []).map(b => ({ kind: 'block', type: b.type })),
+    };
+    byName.set(cat.name, cat);
+  }
+  return Array.from(byName.values());
+};
 
 // ── Export current workspace as library ──────────────────────────────────────
 
@@ -355,6 +490,199 @@ export const BUILTIN_LIBRARY_TEMPLATES = [
         { kind: 'block', type: 'anim_shake' },
         { kind: 'block', type: 'anim_spin' },
         { kind: 'block', type: 'anim_blink' },
+      ]
+    }
+  },
+  {
+    name: 'game-utils',
+    version: '1.0.0',
+    description: 'Simple game utilities: score tracking, sprite collision, game over',
+    author: 'BlockPy',
+    colour: '#7c3aed',
+    reversePatterns: [
+      { python: 'game.set_score({SCORE})',   block: 'game_set_score' },
+      { python: 'game.change_score({DELTA})', block: 'game_change_score' },
+      { python: 'game.get_score()',          block: 'game_get_score' },
+      { python: 'game.touching_sprite({NAME})', block: 'game_touching_sprite' },
+      { python: 'game.game_over()',          block: 'game_over' },
+    ],
+    blocks: [
+      {
+        type: 'game_init', colour: '#6d28d9', tooltip: 'Initialize game state (score = 0)',
+        inputs: [{ kind: 'dummy', fields: [{ type: 'label', label: '🎮 game start' }] }]
+      },
+      {
+        type: 'game_set_score', colour: '#7c3aed', tooltip: 'Set score to a specific value',
+        inputs: [{ kind: 'dummy', fields: [{ type: 'label', label: 'set score to' }, { type: 'number', name: 'SCORE', default: 0 }] }]
+      },
+      {
+        type: 'game_change_score', colour: '#7c3aed', tooltip: 'Change score by amount',
+        inputs: [{ kind: 'dummy', fields: [{ type: 'label', label: 'change score by' }, { type: 'number', name: 'DELTA', default: 1 }] }]
+      },
+      {
+        type: 'game_get_score', colour: '#7c3aed', tooltip: 'Get current score', output: true,
+        inputs: [{ kind: 'dummy', fields: [{ type: 'label', label: 'score' }] }]
+      },
+      {
+        type: 'game_touching_sprite', colour: '#8b5cf6', tooltip: 'Check if touching another sprite', output: true,
+        inputs: [{ kind: 'dummy', fields: [{ type: 'label', label: 'touching sprite' }, { type: 'text_input', name: 'NAME', default: 'enemy' }] }]
+      },
+      {
+        type: 'game_over', colour: '#6d28d9', tooltip: 'End the game',
+        inputs: [{ kind: 'dummy', fields: [{ type: 'label', label: '🛑 game over' }] }]
+      },
+    ],
+    generators: {
+      python: {
+        game_init:     "return 'game.init()\\n';",
+        game_set_score:  "const s=block.getFieldValue('SCORE'); return `game.set_score(${s})\\n`;",
+        game_change_score: "const d=block.getFieldValue('DELTA'); return `game.change_score(${d})\\n`;",
+        game_get_score:  "return ['game.get_score()', pythonGenerator.ORDER_FUNCTION_CALL];",
+        game_touching_sprite: "const n=block.getFieldValue('NAME'); return [`game.touching_sprite(${JSON.stringify(n)})`, pythonGenerator.ORDER_FUNCTION_CALL];",
+        game_over:     "return 'game.game_over()\\n';",
+      },
+      js: {
+        game_init:     "return 'window._gameScore = 0;\\n';",
+        game_set_score:  "const s=block.getFieldValue('SCORE'); return `window._gameScore = ${s};\\n`;",
+        game_change_score: "const d=block.getFieldValue('DELTA'); return `window._gameScore = (window._gameScore || 0) + ${d};\\n`;",
+        game_get_score:  "return ['(window._gameScore || 0)', javascriptGenerator.ORDER_ATOMIC];",
+        game_touching_sprite: "const n=block.getFieldValue('NAME'); return [`false /* touching ${n} not implemented */`, javascriptGenerator.ORDER_ATOMIC];",
+        game_over:     "return 'throw new Error(\"Game Over!\");\\n';",
+      }
+    },
+    toolboxCategory: {
+      kind: 'category', name: '🎮 Game Utils', colour: '#7c3aed',
+      contents: [
+        { kind: 'block', type: 'game_init' },
+        { kind: 'sep' },
+        { kind: 'block', type: 'game_set_score' },
+        { kind: 'block', type: 'game_change_score' },
+        { kind: 'block', type: 'game_get_score' },
+        { kind: 'sep' },
+        { kind: 'block', type: 'game_touching_sprite' },
+        { kind: 'block', type: 'game_over' },
+      ]
+    }
+  },
+  {
+    name: 'keyboard-events',
+    version: '1.0.0',
+    description: 'Keyboard event handlers - when key pressed, conditional checks',
+    author: 'BlockPy',
+    colour: '#dc2626',
+    reversePatterns: [],
+    blocks: [
+      {
+        type: 'event_when_key_pressed',
+        colour: '#dc2626',
+        tooltip: 'Runs when a specific key is pressed',
+        previousStatement: false,
+        nextStatement: false,
+        inputs: [
+          {
+            kind: 'dummy',
+            fields: [
+              { type: 'label', label: '⌨️ when key' },
+              {
+                type: 'dropdown',
+                name: 'KEY',
+                options: [
+                  ['space', 'Space'],
+                  ['up arrow ↑', 'ArrowUp'],
+                  ['down arrow ↓', 'ArrowDown'],
+                  ['left arrow ←', 'ArrowLeft'],
+                  ['right arrow →', 'ArrowRight'],
+                  ['enter', 'Enter'],
+                  ['a', 'a'],
+                  ['b', 'b'],
+                  ['c', 'c'],
+                  ['d', 'd'],
+                  ['w', 'w'],
+                  ['s', 's']
+                ]
+              },
+              { type: 'label', label: 'pressed' }
+            ]
+          },
+          {
+            kind: 'statement',
+            name: 'DO',
+            label: ''
+          }
+        ]
+      },
+      {
+        type: 'event_when_any_key_pressed',
+        colour: '#dc2626',
+        tooltip: 'Runs when any key is pressed',
+        previousStatement: false,
+        nextStatement: false,
+        inputs: [
+          {
+            kind: 'dummy',
+            fields: [
+              { type: 'label', label: '⌨️ when any key pressed' }
+            ]
+          },
+          {
+            kind: 'statement',
+            name: 'DO',
+            label: ''
+          }
+        ]
+      },
+      {
+        type: 'event_is_key_pressed',
+        colour: '#b91c1c',
+        tooltip: 'Check if a key is currently pressed',
+        output: true,
+        inputs: [
+          {
+            kind: 'dummy',
+            fields: [
+              { type: 'label', label: 'key' },
+              {
+                type: 'dropdown',
+                name: 'KEY',
+                options: [
+                  ['space', 'Space'],
+                  ['up arrow ↑', 'ArrowUp'],
+                  ['down arrow ↓', 'ArrowDown'],
+                  ['left arrow ←', 'ArrowLeft'],
+                  ['right arrow →', 'ArrowRight'],
+                  ['a', 'a'],
+                  ['w', 'w'],
+                  ['s', 's'],
+                  ['d', 'd']
+                ]
+              },
+              { type: 'label', label: 'pressed?' }
+            ]
+          }
+        ]
+      }
+    ],
+    generators: {
+      python: {
+        event_when_key_pressed: "const key=block.getFieldValue('KEY'); const code=pythonGenerator.statementToCode(block,'DO')||'  pass\\n'; return `# Event: when ${key} pressed\\ndef on_key_${key.replace(/[^a-zA-Z0-9]/g,'_')}():\\n${code}\\n`;",
+        event_when_any_key_pressed: "const code=pythonGenerator.statementToCode(block,'DO')||'  pass\\n'; return `# Event: when any key pressed\\ndef on_any_key():\\n${code}\\n`;",
+        event_is_key_pressed: "const key=block.getFieldValue('KEY'); return [`keyboard.is_pressed('${key}')`, pythonGenerator.ORDER_FUNCTION_CALL];"
+      },
+      js: {
+        event_when_key_pressed: "const key=block.getFieldValue('KEY'); const code=javascriptGenerator.statementToCode(block,'DO'); return `// Event: when ${key} pressed\\nwindow.addEventListener('keydown', async (e) => {\\n  if (e.code === '${key}' || e.key === '${key}') {\\n${code}  }\\n});\\n`;",
+        event_when_any_key_pressed: "const code=javascriptGenerator.statementToCode(block,'DO'); return `// Event: when any key pressed\\nwindow.addEventListener('keydown', async (e) => {\\n${code}});\\n`;",
+        event_is_key_pressed: "const key=block.getFieldValue('KEY'); return [`(await window.spriteController.isKeyPressed('${key}'))`, javascriptGenerator.ORDER_ATOMIC];"
+      }
+    },
+    toolboxCategory: {
+      kind: 'category',
+      name: '⌨️ Keyboard',
+      colour: '#dc2626',
+      contents: [
+        { kind: 'block', type: 'event_when_key_pressed' },
+        { kind: 'block', type: 'event_when_any_key_pressed' },
+        { kind: 'sep' },
+        { kind: 'block', type: 'event_is_key_pressed' }
       ]
     }
   }

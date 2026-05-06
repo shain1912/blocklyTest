@@ -42,24 +42,7 @@ describe('Custom Blocks Reorganization', () => {
             // We might need to mock inputs if we test logical blocks, but for atomic blocks this is fine.
         });
 
-        describe('turn_left', () => {
-            it('should be defined', () => {
-                expect(Blockly.Blocks['turn_left']).toBeDefined();
-            });
-
-            it('should generate correct JavaScript code', () => {
-                const block = mockBlock('turn_left', { DEGREES: 15, DIRECTION: 'left' });
-                const code = javascriptGenerator.forBlock['turn_left'](block);
-                // Expecting equivalent of turn(-15)
-                expect(code.trim()).toContain('turn(-15)');
-            });
-
-            it('should generate correct Python code', () => {
-                const block = mockBlock('turn_left', { DEGREES: 15, DIRECTION: 'left' });
-                const code = pythonGenerator.forBlock['turn_left'](block);
-                expect(code.trim()).toContain('turn(-15)');
-            });
-        });
+        // turn_left removed - turn_right handles both directions via dropdown
 
         describe('if_on_edge_bounce', () => {
             it('should be defined', () => {

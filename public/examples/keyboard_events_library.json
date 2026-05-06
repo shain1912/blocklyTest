@@ -1,0 +1,122 @@
+{
+  "name": "keyboard-events",
+  "version": "1.0.0",
+  "description": "Keyboard event handlers - when key pressed, when key released",
+  "author": "BlockPy",
+  "colour": "#dc2626",
+  "reversePatterns": [],
+  "blocks": [
+    {
+      "type": "event_when_key_pressed",
+      "colour": "#dc2626",
+      "tooltip": "Runs when a specific key is pressed",
+      "previousStatement": false,
+      "nextStatement": false,
+      "inputs": [
+        {
+          "kind": "dummy",
+          "fields": [
+            { "type": "label", "label": "⌨️ when key" },
+            {
+              "type": "dropdown",
+              "name": "KEY",
+              "options": [
+                ["space", "Space"],
+                ["up arrow ↑", "ArrowUp"],
+                ["down arrow ↓", "ArrowDown"],
+                ["left arrow ←", "ArrowLeft"],
+                ["right arrow →", "ArrowRight"],
+                ["enter", "Enter"],
+                ["a", "a"],
+                ["b", "b"],
+                ["c", "c"],
+                ["d", "d"],
+                ["w", "w"],
+                ["s", "s"]
+              ]
+            },
+            { "type": "label", "label": "pressed" }
+          ]
+        },
+        {
+          "kind": "statement",
+          "name": "DO",
+          "label": ""
+        }
+      ]
+    },
+    {
+      "type": "event_when_any_key_pressed",
+      "colour": "#dc2626",
+      "tooltip": "Runs when any key is pressed",
+      "previousStatement": false,
+      "nextStatement": false,
+      "inputs": [
+        {
+          "kind": "dummy",
+          "fields": [
+            { "type": "label", "label": "⌨️ when any key pressed" }
+          ]
+        },
+        {
+          "kind": "statement",
+          "name": "DO",
+          "label": ""
+        }
+      ]
+    },
+    {
+      "type": "event_is_key_pressed",
+      "colour": "#b91c1c",
+      "tooltip": "Check if a key is currently pressed",
+      "output": true,
+      "inputs": [
+        {
+          "kind": "dummy",
+          "fields": [
+            { "type": "label", "label": "key" },
+            {
+              "type": "dropdown",
+              "name": "KEY",
+              "options": [
+                ["space", "Space"],
+                ["up arrow ↑", "ArrowUp"],
+                ["down arrow ↓", "ArrowDown"],
+                ["left arrow ←", "ArrowLeft"],
+                ["right arrow →", "ArrowRight"],
+                ["a", "a"],
+                ["w", "w"],
+                ["s", "s"],
+                ["d", "d"]
+              ]
+            },
+            { "type": "label", "label": "pressed?" }
+          ]
+        }
+      ]
+    }
+  ],
+  "generators": {
+    "python": {
+      "event_when_key_pressed": "const key=block.getFieldValue('KEY'); const code=pythonGenerator.statementToCode(block,'DO')||'  pass\\n'; return `# Event: when ${key} pressed\\ndef on_key_${key.replace(/[^a-zA-Z0-9]/g,'_')}():\\n${code}\\n`;",
+      "event_when_any_key_pressed": "const code=pythonGenerator.statementToCode(block,'DO')||'  pass\\n'; return `# Event: when any key pressed\\ndef on_any_key():\\n${code}\\n`;",
+      "event_is_key_pressed": "const key=block.getFieldValue('KEY'); return [`keyboard.is_pressed('${key}')`, pythonGenerator.ORDER_FUNCTION_CALL];"
+    },
+    "js": {
+      "event_when_key_pressed": "const key=block.getFieldValue('KEY'); const code=javascriptGenerator.statementToCode(block,'DO'); return `// Event: when ${key} pressed\\nwindow.addEventListener('keydown', async (e) => {\\n  if (e.code === '${key}' || e.key === '${key}') {\\n${code}  }\\n});\\n`;",
+      "event_when_any_key_pressed": "const code=javascriptGenerator.statementToCode(block,'DO'); return `// Event: when any key pressed\\nwindow.addEventListener('keydown', async (e) => {\\n${code}});\\n`;",
+      "event_is_key_pressed": "const key=block.getFieldValue('KEY'); return [`(await window.spriteController.isKeyPressed('${key}'))`, javascriptGenerator.ORDER_ATOMIC];"
+    }
+  },
+  "toolboxCategory": {
+    "kind": "category",
+    "name": "⌨️ Keyboard",
+    "colour": "#dc2626",
+    "contents": [
+      { "kind": "block", "type": "event_when_key_pressed" },
+      { "kind": "block", "type": "event_when_any_key_pressed" },
+      { "kind": "sep" },
+      { "kind": "block", "type": "event_is_key_pressed" }
+    ]
+  }
+}

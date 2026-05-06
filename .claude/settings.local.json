@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lsof -ti:5173)",
+      "Bash(npm install -D concurrently)",
+      "Bash(npm test)",
+      "Bash(npm run dev)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

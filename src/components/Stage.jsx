@@ -11,10 +11,26 @@ const Stage = ({ isRunning }) => {
         visible: true,
         talking: null,
         thinking: null,
-        spriteType: 'cat'  // 'cat' | 'turtle' | 'arrow'
+        spriteType: 'cat',  // 'cat' | 'turtle' | 'arrow' | 'dog' | 'robot' | 'ball'
+        costumes: ['cat'], // list of available costumes
+        currentCostumeIndex: 0
+    });
+    const [backdrop, setBackdrop] = useState({
+        type: 'color', // 'color' | 'image'
+        value: '#ffffff', // color or image URL
+        name: 'white',
+        backdrops: [
+            { name: 'white', type: 'color', value: '#ffffff' },
+            { name: 'blue-sky', type: 'color', value: '#87CEEB' },
+            { name: 'green', type: 'color', value: '#90EE90' },
+            { name: 'space', type: 'color', value: '#0a0a1a' }
+        ],
+        currentBackdropIndex: 0
     });
 
     const spriteStateRef = useRef(spriteState);
+    const backdropRef = useRef(backdrop);
+    const variablesRef = useRef(variables);
     const keysPressed = useRef({});
     const mousePos = useRef({ x: 0, y: 0 });
     const isMouseDown = useRef(false);
@@ -47,6 +63,14 @@ const Stage = ({ isRunning }) => {
     useEffect(() => {
         spriteStateRef.current = spriteState;
     }, [spriteState]);
+
+    useEffect(() => {
+        backdropRef.current = backdrop;
+    }, [backdrop]);
+
+    useEffect(() => {
+        variablesRef.current = variables;
+    }, [variables]);
 
     useEffect(() => {
         const handleKeyDown = (e) => { keysPressed.current[e.code] = true; keysPressed.current[e.key] = true; };
@@ -185,15 +209,29 @@ const Stage = ({ isRunning }) => {
                 let newDir = direction;
                 let newX = x;
                 let newY = y;
-                if (x > hw - 50) { newX = hw - 50; if (Math.cos((direction - 90) * Math.PI / 180) > 0) newDir = 180 - direction; }
-                if (x < -(hw - 50)) { newX = -(hw - 50); if (Math.cos((direction - 90) * Math.PI / 180) < 0) newDir = 180 - direction; }
-                if (y > hh - 50) { newY = hh - 50; if (Math.sin((direction - 90) * Math.PI / 180) > 0) newDir = -direction; }
-                if (y < -(hh - 50)) { newY = -(hh - 50); if (Math.sin((direction - 90) * Math.PI / 180) < 0) newDir = -direction; }
+                // Reflect off vertical walls (left/right): reverse x-velocity → newDir = -direction
+                if (x > hw - 50) { newX = hw - 50; if (Math.cos((direction - 90) * Math.PI / 180) > 0) newDir = -direction; }
+                if (x < -(hw - 50)) { newX = -(hw - 50); if (Math.cos((direction - 90) * Math.PI / 180) < 0) newDir = -direction; }
+                // Reflect off horizontal walls (top/bottom): reverse y-velocity → newDir = 180 - direction
+                if (y > hh - 50) { newY = hh - 50; if (Math.sin((direction - 90) * Math.PI / 180) > 0) newDir = 180 - direction; }
+                if (y < -(hh - 50)) { newY = -(hh - 50); if (Math.sin((direction - 90) * Math.PI / 180) < 0) newDir = 180 - direction; }
                 setSpriteState(prev => ({ ...prev, x: newX, y: newY, direction: newDir }));
                 await new Promise(r => setTimeout(r, 16));
             },
-            switchCostume: async (costume) => { console.log('Costume switched to', costume); },
-            nextCostume: async () => { console.log('Next costume'); },
+            switchCostume: async (costume) => {
+                console.log('Costume switched to', costume);
+                const costumes = spriteStateRef.current.costumes || ['cat'];
+                const idx = costumes.indexOf(costume);
+                if (idx !== -1) {
+                    setSpriteState(prev => ({ ...prev, spriteType: costume, currentCostumeIndex: idx }));
+                }
+            },
+            nextCostume: async () => {
+                console.log('Next costume');
+                const costumes = spriteStateRef.current.costumes || ['cat'];
+                const nextIdx = (spriteStateRef.current.currentCostumeIndex + 1) % costumes.length;
+                setSpriteState(prev => ({ ...prev, spriteType: costumes[nextIdx], currentCostumeIndex: nextIdx }));
+            },
 
             // Volume (visual stub - no actual audio volume API cross-browser easily)
             setVolume: async (vol) => { console.log(`Volume set to ${vol}`); },
@@ -303,6 +341,24 @@ const Stage = ({ isRunning }) => {
                 }));
             },
 
+            // ── Backdrop controls ───────────────────────────────────────
+            switchBackdrop: async (backdropName) => {
+                const backdrops = backdropRef.current.backdrops;
+                const found = backdrops.find(b => b.name === backdropName);
+                if (found) {
+                    const idx = backdrops.indexOf(found);
+                    setBackdrop(prev => ({ ...prev, ...found, currentBackdropIndex: idx }));
+                }
+            },
+            nextBackdrop: async () => {
+                const backdrops = backdropRef.current.backdrops;
+                const nextIdx = (backdropRef.current.currentBackdropIndex + 1) % backdrops.length;
+                const next = backdrops[nextIdx];
+                setBackdrop(prev => ({ ...prev, ...next, currentBackdropIndex: nextIdx }));
+            },
+            getBackdropNumber: async () => backdropRef.current.currentBackdropIndex + 1,
+            getBackdropName: async () => backdropRef.current.name,
+
             // ── Pen controls ────────────────────────────────────────────
             penDown: () => { isPenDown.current = true; },
             penUp:   () => { isPenDown.current = false; },
@@ -313,10 +369,33 @@ const Stage = ({ isRunning }) => {
                 if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
             },
 
+            // Test hooks: synchronous snapshot of current sprite state for Playwright
+            getState: () => ({ ...spriteStateRef.current }),
+            getVariables: () => {
+                const out = {};
+                for (const [k, v] of Object.entries(variablesRef.current || {})) {
+                    out[k] = { ...v };
+                }
+                return out;
+            },
+
             reset: () => {
                 setSpriteState({
                     x: 0, y: 0, direction: 90, size: 100, visible: true,
-                    talking: null, thinking: null, spriteType: 'cat'
+                    talking: null, thinking: null, spriteType: 'cat',
+                    costumes: ['cat'], currentCostumeIndex: 0
+                });
+                setBackdrop({
+                    type: 'color',
+                    value: '#ffffff',
+                    name: 'white',
+                    backdrops: [
+                        { name: 'white', type: 'color', value: '#ffffff' },
+                        { name: 'blue-sky', type: 'color', value: '#87CEEB' },
+                        { name: 'green', type: 'color', value: '#90EE90' },
+                        { name: 'space', type: 'color', value: '#0a0a1a' }
+                    ],
+                    currentBackdropIndex: 0
                 });
                 setVariables({});
                 isPenDown.current = false;
@@ -359,7 +438,17 @@ const Stage = ({ isRunning }) => {
                     }}>🗑</button>
                 </div>
             </div>
-            <div className="stage-canvas" ref={stageCanvasRef}>
+            <div
+                className="stage-canvas"
+                data-testid="stage-canvas"
+                ref={stageCanvasRef}
+                style={{
+                    backgroundColor: backdrop.type === 'color' ? backdrop.value : undefined,
+                    backgroundImage: backdrop.type === 'image' ? `url(${backdrop.value})` : undefined,
+                    backgroundSize: 'cover',
+                    backgroundPosition: 'center'
+                }}
+            >
                 {/* Pen drawing layer — fixed to stage, NOT inside sprite */}
                 <canvas
                     ref={drawingCanvasRef}
@@ -393,27 +482,56 @@ const Stage = ({ isRunning }) => {
                             {spriteState.spriteType === 'turtle' ? (
                                 /* Top-down turtle SVG facing right */
                                 <svg width="60" height="60" viewBox="0 0 60 60">
-                                    {/* Legs */}
                                     <ellipse cx="14" cy="14" rx="7" ry="5" fill="#4a8c3a" stroke="#2a5c1a" strokeWidth="1.5" transform="rotate(-35,14,14)"/>
                                     <ellipse cx="46" cy="14" rx="7" ry="5" fill="#4a8c3a" stroke="#2a5c1a" strokeWidth="1.5" transform="rotate(35,46,14)"/>
                                     <ellipse cx="14" cy="46" rx="7" ry="5" fill="#4a8c3a" stroke="#2a5c1a" strokeWidth="1.5" transform="rotate(35,14,46)"/>
                                     <ellipse cx="46" cy="46" rx="7" ry="5" fill="#4a8c3a" stroke="#2a5c1a" strokeWidth="1.5" transform="rotate(-35,46,46)"/>
-                                    {/* Shell */}
                                     <circle cx="30" cy="30" r="16" fill="#5aaa3a" stroke="#2a5c1a" strokeWidth="2"/>
                                     <ellipse cx="30" cy="30" rx="9" ry="9" fill="#3a8a2a" opacity="0.6"/>
                                     <line x1="30" y1="14" x2="30" y2="46" stroke="#2a5c1a" strokeWidth="1" opacity="0.5"/>
                                     <line x1="14" y1="30" x2="46" y2="30" stroke="#2a5c1a" strokeWidth="1" opacity="0.5"/>
-                                    {/* Tail */}
                                     <ellipse cx="8" cy="30" rx="5" ry="3" fill="#4a8c3a" stroke="#2a5c1a" strokeWidth="1.5"/>
-                                    {/* Head — points RIGHT (direction=90) */}
                                     <circle cx="50" cy="30" r="8" fill="#6aaa4a" stroke="#2a5c1a" strokeWidth="1.5"/>
                                     <circle cx="53" cy="27" r="2" fill="#222"/>
                                     <circle cx="53" cy="33" r="2" fill="#222"/>
                                 </svg>
                             ) : spriteState.spriteType === 'arrow' ? (
-                                /* Simple arrow cursor */
                                 <svg width="40" height="40" viewBox="0 0 40 40">
                                     <polygon points="20,2 38,38 20,28 2,38" fill="#333" stroke="#fff" strokeWidth="2"/>
+                                </svg>
+                            ) : spriteState.spriteType === 'dog' ? (
+                                <svg width="80" height="80" viewBox="0 0 80 80">
+                                    <ellipse cx="60" cy="35" rx="8" ry="15" fill="#8B4513" stroke="#654321" strokeWidth="1.5"/>
+                                    <ellipse cx="60" cy="55" rx="8" ry="15" fill="#8B4513" stroke="#654321" strokeWidth="1.5"/>
+                                    <ellipse cx="40" cy="45" rx="20" ry="18" fill="#A0522D" stroke="#654321" strokeWidth="2"/>
+                                    <circle cx="65" cy="45" r="12" fill="#A0522D" stroke="#654321" strokeWidth="2"/>
+                                    <circle cx="68" cy="42" r="3" fill="#222"/>
+                                    <circle cx="68" cy="48" r="3" fill="#222"/>
+                                    <ellipse cx="73" cy="45" rx="3" ry="2" fill="#333"/>
+                                    <ellipse cx="20" cy="25" rx="6" ry="12" fill="#8B4513" stroke="#654321" strokeWidth="1.5"/>
+                                    <ellipse cx="20" cy="65" rx="6" ry="12" fill="#8B4513" stroke="#654321" strokeWidth="1.5"/>
+                                    <path d="M 35 60 Q 40 65 45 60" fill="none" stroke="#654321" strokeWidth="2"/>
+                                </svg>
+                            ) : spriteState.spriteType === 'robot' ? (
+                                <svg width="70" height="70" viewBox="0 0 70 70">
+                                    <rect x="20" y="10" width="30" height="8" fill="#666" stroke="#333" strokeWidth="1.5" rx="2"/>
+                                    <line x1="35" y1="10" x2="35" y2="5" stroke="#666" strokeWidth="2"/>
+                                    <circle cx="35" cy="4" r="2.5" fill="#ff0" stroke="#333" strokeWidth="1"/>
+                                    <rect x="18" y="20" width="34" height="30" fill="#4a9eff" stroke="#2a5ecc" strokeWidth="2" rx="3"/>
+                                    <circle cx="27" cy="30" r="4" fill="#0ff" stroke="#333" strokeWidth="1"/>
+                                    <circle cx="43" cy="30" r="4" fill="#0ff" stroke="#333" strokeWidth="1"/>
+                                    <rect x="28" y="38" width="14" height="6" fill="#333" stroke="#222" strokeWidth="1" rx="2"/>
+                                    <rect x="10" y="28" width="8" height="15" fill="#4a9eff" stroke="#2a5ecc" strokeWidth="1.5" rx="2"/>
+                                    <rect x="52" y="28" width="8" height="15" fill="#4a9eff" stroke="#2a5ecc" strokeWidth="1.5" rx="2"/>
+                                    <rect x="23" y="50" width="8" height="16" fill="#666" stroke="#333" strokeWidth="1.5" rx="2"/>
+                                    <rect x="39" y="50" width="8" height="16" fill="#666" stroke="#333" strokeWidth="1.5" rx="2"/>
+                                </svg>
+                            ) : spriteState.spriteType === 'ball' ? (
+                                <svg width="50" height="50" viewBox="0 0 50 50">
+                                    <circle cx="25" cy="25" r="20" fill="#e74c3c" stroke="#c0392b" strokeWidth="2"/>
+                                    <ellipse cx="25" cy="25" rx="20" ry="10" fill="#e74c3c" opacity="0.3"/>
+                                    <circle cx="18" cy="18" r="6" fill="#fff" opacity="0.5"/>
+                                    <path d="M 15 25 Q 25 15 35 25 Q 25 35 15 25" fill="none" stroke="#c0392b" strokeWidth="1.5"/>
                                 </svg>
                             ) : (
                                 /* Default cat SVG */

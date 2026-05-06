@@ -1,0 +1,179 @@
+.file-explorer {
+    width: 250px;
+    background-color: #1e1e1e;
+    /* VS Code sidebar background */
+    color: #cccccc;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #333;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    font-size: 13px;
+    height: 100%;
+}
+
+.file-explorer.collapsed {
+    width: 50px;
+}
+
+.explorer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 11px;
+    color: #bbbbbb;
+}
+
+.explorer-header button {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+}
+
+.explorer-header button:hover {
+    background-color: #333;
+}
+
+.file-actions {
+    display: flex;
+    padding: 5px 10px;
+    gap: 5px;
+    border-bottom: 1px solid #252526;
+}
+
+.action-btn-small {
+    background: none;
+    border: none;
+    color: #cccccc;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.action-btn-small:hover {
+    background-color: #333;
+}
+
+.file-list {
+    flex: 1;
+    overflow-y: auto;
+    padding-top: 5px;
+}
+
+.file-item {
+    display: flex;
+    align-items: center;
+    padding: 5px 15px;
+    cursor: pointer;
+    color: #cccccc;
+    gap: 8px;
+}
+
+.file-item:hover {
+    background-color: #2a2d2e;
+}
+
+.file-item.active {
+    background-color: #37373d;
+    color: #ffffff;
+}
+
+.file-icon {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.8;
+}
+
+.file-item.active .file-icon {
+    opacity: 1;
+}
+
+.file-name {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ... existing styles ... */
+
+.folder-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease;
+    width: 16px;
+    height: 16px;
+    opacity: 0.7;
+}
+
+.folder-arrow.open {
+    transform: rotate(90deg);
+}
+
+.rename-input {
+    background: #3c3c3c;
+    border: 1px solid #007fd4;
+    color: white;
+    font-family: inherit;
+    font-size: inherit;
+    padding: 2px 4px;
+    width: 100%;
+    outline: none;
+    margin-right: 5px;
+}
+
+.item-actions {
+    display: none;
+    align-items: center;
+    gap: 4px;
+}
+
+.file-item:hover .item-actions {
+    display: flex;
+}
+
+.action-btn-mini {
+    background: none;
+    border: none;
+    color: #cccccc;
+    cursor: pointer;
+    padding: 2px;
+    opacity: 0.7;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.action-btn-mini:hover {
+    color: white;
+    opacity: 1;
+}
+
+/* Update delete-btn to match mini style */
+.delete-btn {
+    display: flex;
+    /* Ensure it aligns */
+    opacity: 0.7;
+}
+
+.file-item.active .delete-btn {
+    opacity: 0.9;
+}
+
+.folder-children {
+    display: flex;
+    flex-direction: column;
+}

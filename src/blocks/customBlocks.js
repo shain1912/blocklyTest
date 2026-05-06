@@ -2,8 +2,11 @@
 import * as Blockly from 'blockly/core';
 import { javascriptGenerator } from 'blockly/javascript';
 import { pythonGenerator } from 'blockly/python';
+import 'blockly/blocks'; // Import built-in blocks (including lists)
 import './structure'; // Register library structure blocks
+import './exactPythonBlocks'; // Register exact-IR block family (py_tuple_assign, py_attr, etc.)
 import { classToolboxCategory } from './classes'; // Register class/OOP blocks
+import { blockBuilderToolboxCategory } from './blockBuilder'; // Register block builder meta-blocks
 import { buildLibraryToolboxCategories, restoreLibraries } from '../utils/libraryManager';
 
 // Restore previously installed libraries on boot
@@ -15,25 +18,74 @@ restoreLibraries();
 
 Blockly.Blocks['print'] = {
   init: function () {
+    // Accept either a connected value-block (structural — "print(<any expression>)")
+    // or, for backward compat, a plain text field that prints the string literal.
+    this.appendValueInput('VALUE').setCheck(null).appendField('say');
     this.appendDummyInput()
-      .appendField("say")
-      .appendField(new Blockly.FieldTextInput("Hello!"), "TEXT");
+      .appendField(new Blockly.FieldTextInput(''), 'TEXT');
+    this.setInputsInline(true);
     this.setPreviousStatement(true, null);
     this.setNextStatement(true, null);
     this.setColour(160);
-    this.setTooltip("Displays text on screen");
-    this.setHelpUrl("");
+    this.setTooltip('Prints a value. Plug any value block in, or type a literal in the text field.');
   }
 };
 
-javascriptGenerator.forBlock['print'] = function (_block) {
-  const text = _block.getFieldValue('TEXT');
-  return `await window.spriteController.say(${JSON.stringify(text)}); \n`;
+/** Prefer a connected value block; fall back to the legacy text field. */
+const _readPrintArg = (block, gen) => {
+  const v = gen.valueToCode(block, 'VALUE', 0);
+  if (v && v.trim()) return { code: v, isExpr: true };
+  const t = block.getFieldValue('TEXT') || '';
+  return { code: t, isExpr: false };
 };
 
-pythonGenerator.forBlock['print'] = function (_block) {
-  const text = _block.getFieldValue('TEXT');
-  return `print(${JSON.stringify(text)}) \n`;
+javascriptGenerator.forBlock['print'] = function (block) {
+  const { code, isExpr } = _readPrintArg(block, javascriptGenerator);
+  const arg = isExpr ? code : JSON.stringify(code);
+  return `await window.spriteController.say(${arg});\n`;
+};
+
+pythonGenerator.forBlock['print'] = function (block) {
+  const { code, isExpr } = _readPrintArg(block, pythonGenerator);
+  const arg = isExpr ? code : JSON.stringify(code);
+  return `print(${arg})\n`;
+};
+
+// ── Python builtins (str/int/float/len/...) as a single value-block ───────
+// One block with a FUNC dropdown covers the most common Python builtin
+// coercion/inspection calls. pyAst maps `str(x)`, `int(x)`, … here via
+// schemas in librarySchemaRegistry — without this block they fell to py_call
+// and showed up as gray "str" labels in the user's screenshot.
+Blockly.Blocks['py_builtin_cast'] = {
+  init: function () {
+    this.appendValueInput('VALUE').setCheck(null)
+      .appendField(new Blockly.FieldDropdown([
+        ['str',   'str'], ['int',  'int'],   ['float', 'float'],
+        ['len',   'len'], ['bool', 'bool'],  ['abs',   'abs'],
+        ['repr',  'repr'], ['type', 'type'], ['round', 'round'],
+      ]), 'FUNC');
+    this.setOutput(true, null);
+    this.setColour('#7600A7');   // matches Math / Operators palette
+    this.setTooltip('Python builtins: str / int / float / len / bool / abs / repr / type / round');
+  }
+};
+
+pythonGenerator.forBlock['py_builtin_cast'] = function (b) {
+  const f = b.getFieldValue('FUNC') || 'str';
+  const v = pythonGenerator.valueToCode(b, 'VALUE', 0) || '0';
+  return [`${f}(${v})`, 0];
+};
+javascriptGenerator.forBlock['py_builtin_cast'] = function (b) {
+  const f = b.getFieldValue('FUNC') || 'str';
+  const v = javascriptGenerator.valueToCode(b, 'VALUE', 0) || '0';
+  if (f === 'str')   return [`String(${v})`, 0];
+  if (f === 'int')   return [`parseInt(${v}, 10)`, 0];
+  if (f === 'float') return [`parseFloat(${v})`, 0];
+  if (f === 'len')   return [`(${v}).length`, 0];
+  if (f === 'bool')  return [`Boolean(${v})`, 0];
+  if (f === 'abs')   return [`Math.abs(${v})`, 0];
+  if (f === 'round') return [`Math.round(${v})`, 0];
+  return [`${f}(${v})`, 0];
 };
 
 Blockly.Blocks['variable'] = {
@@ -118,64 +170,76 @@ pythonGenerator.forBlock['repeat'] = function (_block) {
   return `for i in range(${repeats}): \n${branch} \n`;
 };
 
+/**
+ * Condition read helper with backward compat.
+ *
+ * Precedence:
+ *   1. CONDITION_VAL value-input (structural; new AST path uses this)
+ *   2. CONDITION text field (legacy; pre-existing saved workspaces and tests use this)
+ *   3. fallback 'True'
+ */
+const _condReadWithFallback = (block, gen) => {
+  const v = gen.valueToCode(block, 'CONDITION_VAL', 0);
+  if (v && v.trim()) return v;
+  return block.getFieldValue('CONDITION') || 'True';
+};
+
 Blockly.Blocks['if'] = {
   init: function () {
+    // A structural value-input slot (lives alongside the legacy text field so
+    // old workspaces still load and work exactly as before).
+    this.appendValueInput('CONDITION_VAL').setCheck(null).appendField('if');
     this.appendDummyInput()
-      .appendField("if")
-      .appendField(new Blockly.FieldTextInput("true"), "CONDITION");
-    this.appendStatementInput("DO")
-      .setCheck(null);
+      .appendField(new Blockly.FieldTextInput('true'), 'CONDITION');
+    this.appendStatementInput('DO').setCheck(null);
+    this.setInputsInline(true);
     this.setPreviousStatement(true, null);
     this.setNextStatement(true, null);
     this.setColour(210);
-    this.setTooltip("Executes blocks if condition is true");
-    this.setHelpUrl("");
+    this.setTooltip('Executes the DO branch when the condition is true. Plug a value block into the slot OR type a condition in the text field.');
   }
 };
 
-javascriptGenerator.forBlock['if'] = function (_block) {
-  const condition = _block.getFieldValue('CONDITION');
-  const branch = javascriptGenerator.statementToCode(_block, 'DO');
+javascriptGenerator.forBlock['if'] = function (block) {
+  const condition = _condReadWithFallback(block, javascriptGenerator);
+  const branch = javascriptGenerator.statementToCode(block, 'DO');
   return `if (${condition}) { \n${branch} } \n`;
 };
 
-pythonGenerator.forBlock['if'] = function (_block) {
-  const condition = _block.getFieldValue('CONDITION');
-  const branch = pythonGenerator.statementToCode(_block, 'DO') || '  pass\n';
-  return `if ${condition}: \n${branch} \n`;
+pythonGenerator.forBlock['if'] = function (block) {
+  const condition = _condReadWithFallback(block, pythonGenerator);
+  const branch = pythonGenerator.statementToCode(block, 'DO') || '  pass\n';
+  return `if ${condition}:\n${branch}`;
 };
 
 Blockly.Blocks['if_else'] = {
   init: function () {
+    this.appendValueInput('CONDITION_VAL').setCheck(null).appendField('if');
     this.appendDummyInput()
-      .appendField("if")
-      .appendField(new Blockly.FieldTextInput("true"), "CONDITION");
-    this.appendStatementInput("DO")
-      .setCheck(null);
-    this.appendDummyInput()
-      .appendField("else");
-    this.appendStatementInput("ELSE")
-      .setCheck(null);
+      .appendField(new Blockly.FieldTextInput('true'), 'CONDITION');
+    this.appendStatementInput('DO').setCheck(null);
+    this.appendDummyInput().appendField('else');
+    this.appendStatementInput('ELSE').setCheck(null);
+    this.setInputsInline(true);
     this.setPreviousStatement(true, null);
     this.setNextStatement(true, null);
     this.setColour(210);
-    this.setTooltip("Executes blocks if condition is true, otherwise executes else blocks");
-    this.setHelpUrl("");
+    this.setTooltip('Executes the DO branch when the condition is true, otherwise ELSE. Plug a value block OR use the text field.');
   }
 };
 
-javascriptGenerator.forBlock['if_else'] = function (_block) {
-  const condition = _block.getFieldValue('CONDITION');
-  const branch = javascriptGenerator.statementToCode(_block, 'DO');
-  const elseBranch = javascriptGenerator.statementToCode(_block, 'ELSE');
+javascriptGenerator.forBlock['if_else'] = function (block) {
+  const condition = _condReadWithFallback(block, javascriptGenerator);
+  const branch = javascriptGenerator.statementToCode(block, 'DO');
+  const elseBranch = javascriptGenerator.statementToCode(block, 'ELSE');
   return `if (${condition}) { \n${branch} } else { \n${elseBranch} } \n`;
 };
 
-pythonGenerator.forBlock['if_else'] = function (_block) {
-  const condition = _block.getFieldValue('CONDITION');
-  const branch = pythonGenerator.statementToCode(_block, 'DO') || '  pass\n';
-  const elseBranch = pythonGenerator.statementToCode(_block, 'ELSE') || '  pass\n';
-  return `if ${condition}: \n${branch}else: \n${elseBranch} \n`;
+pythonGenerator.forBlock['if_else'] = function (block) {
+  const condition = _condReadWithFallback(block, pythonGenerator);
+  const branch = pythonGenerator.statementToCode(block, 'DO') || '  pass\n';
+  const elseBranch = pythonGenerator.statementToCode(block, 'ELSE') || '  pass\n';
+  return `if ${condition}:\n${branch}else:\n${elseBranch}`;
 };
 
 Blockly.Blocks['wait'] = {
@@ -229,29 +293,28 @@ pythonGenerator.forBlock['loop_forever'] = function (_block) {
 
 Blockly.Blocks['repeat_until'] = {
   init: function () {
+    this.appendValueInput('CONDITION_VAL').setCheck(null).appendField('repeat until');
     this.appendDummyInput()
-      .appendField("repeat until")
-      .appendField(new Blockly.FieldTextInput("true"), "CONDITION");
-    this.appendStatementInput("DO")
-      .setCheck(null);
+      .appendField(new Blockly.FieldTextInput('true'), 'CONDITION');
+    this.appendStatementInput('DO').setCheck(null);
+    this.setInputsInline(true);
     this.setPreviousStatement(true, null);
     this.setNextStatement(true, null);
     this.setColour(120);
-    this.setTooltip("Repeats until condition is true");
-    this.setHelpUrl("");
+    this.setTooltip('Repeats until the condition is true. Plug a value block OR use the text field.');
   }
 };
 
-javascriptGenerator.forBlock['repeat_until'] = function (_block) {
-  const condition = _block.getFieldValue('CONDITION');
-  const branch = javascriptGenerator.statementToCode(_block, 'DO');
+javascriptGenerator.forBlock['repeat_until'] = function (block) {
+  const condition = _condReadWithFallback(block, javascriptGenerator);
+  const branch = javascriptGenerator.statementToCode(block, 'DO');
   return `while (!(${condition})) { \n${branch} } \n`;
 };
 
-pythonGenerator.forBlock['repeat_until'] = function (_block) {
-  const condition = _block.getFieldValue('CONDITION');
-  const branch = pythonGenerator.statementToCode(_block, 'DO') || '  pass\n';
-  return `while not(${condition}): \n${branch} \n`;
+pythonGenerator.forBlock['repeat_until'] = function (block) {
+  const condition = _condReadWithFallback(block, pythonGenerator);
+  const branch = pythonGenerator.statementToCode(block, 'DO') || '  pass\n';
+  return `while not(${condition}):\n${branch}`;
 };
 
 Blockly.Blocks['comment'] = {
@@ -925,6 +988,92 @@ pythonGenerator.forBlock['costume_number'] = function (_block) {
   return [`sprite.costume_number`, pythonGenerator.ORDER_MEMBER];
 };
 
+Blockly.Blocks['switch_backdrop'] = {
+  init: function () {
+    this.appendDummyInput()
+      .appendField("switch backdrop to")
+      .appendField(new Blockly.FieldDropdown([
+        ["white", "white"],
+        ["blue-sky", "blue-sky"],
+        ["green", "green"],
+        ["space", "space"]
+      ]), "BACKDROP");
+    this.setPreviousStatement(true, null);
+    this.setNextStatement(true, null);
+    this.setColour(170);
+    this.setTooltip("Switches to a different backdrop");
+    this.setHelpUrl("");
+  }
+};
+
+javascriptGenerator.forBlock['switch_backdrop'] = function (_block) {
+  const backdrop = _block.getFieldValue('BACKDROP');
+  return `await window.spriteController.switchBackdrop("${backdrop}");\n`;
+};
+
+pythonGenerator.forBlock['switch_backdrop'] = function (_block) {
+  const backdrop = _block.getFieldValue('BACKDROP');
+  return `stage.switch_backdrop("${backdrop}")\n`;
+};
+
+Blockly.Blocks['next_backdrop'] = {
+  init: function () {
+    this.appendDummyInput()
+      .appendField("next backdrop");
+    this.setPreviousStatement(true, null);
+    this.setNextStatement(true, null);
+    this.setColour(170);
+    this.setTooltip("Switches to the next backdrop");
+    this.setHelpUrl("");
+  }
+};
+
+javascriptGenerator.forBlock['next_backdrop'] = function (_block) {
+  return `await window.spriteController.nextBackdrop();\n`;
+};
+
+pythonGenerator.forBlock['next_backdrop'] = function (_block) {
+  return `stage.next_backdrop()\n`;
+};
+
+Blockly.Blocks['backdrop_number'] = {
+  init: function () {
+    this.appendDummyInput()
+      .appendField("backdrop number");
+    this.setOutput(true, null);
+    this.setColour(170);
+    this.setTooltip("Returns current backdrop number");
+    this.setHelpUrl("");
+  }
+};
+
+javascriptGenerator.forBlock['backdrop_number'] = function (_block) {
+  return [`(await window.spriteController.getBackdropNumber())`, javascriptGenerator.ORDER_NONE];
+};
+
+pythonGenerator.forBlock['backdrop_number'] = function (_block) {
+  return [`stage.backdrop_number`, pythonGenerator.ORDER_MEMBER];
+};
+
+Blockly.Blocks['backdrop_name'] = {
+  init: function () {
+    this.appendDummyInput()
+      .appendField("backdrop name");
+    this.setOutput(true, null);
+    this.setColour(170);
+    this.setTooltip("Returns current backdrop name");
+    this.setHelpUrl("");
+  }
+};
+
+javascriptGenerator.forBlock['backdrop_name'] = function (_block) {
+  return [`(await window.spriteController.getBackdropName())`, javascriptGenerator.ORDER_NONE];
+};
+
+pythonGenerator.forBlock['backdrop_name'] = function (_block) {
+  return [`stage.backdrop_name`, pythonGenerator.ORDER_MEMBER];
+};
+
 Blockly.Blocks['set_size'] = {
   init: function () {
     this.appendDummyInput()
@@ -1500,37 +1649,7 @@ pythonGenerator.forBlock['volume'] = function (_block) {
   return [`sprite.volume`, pythonGenerator.ORDER_MEMBER];
 };
 
-Blockly.Blocks['turn_left'] = {
-  init: function () {
-    this.appendDummyInput()
-      .appendField("turn")
-      .appendField(new Blockly.FieldDropdown([
-        ["left", "left"],
-        ["right", "right"]
-      ]), "DIRECTION")
-      .appendField(new Blockly.FieldNumber(15), "DEGREES")
-      .appendField("degrees");
-    this.setPreviousStatement(true, null);
-    this.setNextStatement(true, null);
-    this.setColour(260);
-    this.setTooltip("Turns the sprite left");
-    this.setHelpUrl("");
-  }
-};
-
-javascriptGenerator.forBlock['turn_left'] = function (_block) {
-  const direction = _block.getFieldValue('DIRECTION');
-  const degrees = _block.getFieldValue('DEGREES');
-  const mult = direction === 'left' ? -1 : 1;
-  return `await window.spriteController.turn(${degrees * mult});\n`;
-};
-
-pythonGenerator.forBlock['turn_left'] = function (_block) {
-  const direction = _block.getFieldValue('DIRECTION');
-  const degrees = _block.getFieldValue('DEGREES');
-  const mult = direction === 'left' ? -1 : 1;
-  return `sprite.turn(${degrees * mult})\n`;
-};
+// turn_left removed - turn_right already has left/right dropdown
 
 Blockly.Blocks['when_flag_clicked'] = {
   init: function () {
@@ -1572,7 +1691,16 @@ javascriptGenerator.forBlock['on_start'] = function (block) {
 };
 
 pythonGenerator.forBlock['on_start'] = function (block) {
-  return pythonGenerator.statementToCode(block, 'DO');
+  // Hat block — its body is conceptually at module scope. Blockly's
+  // statementToCode prefixes one INDENT level, so we strip it back off so
+  // the generated Python matches what a user would hand-type for the
+  // top-level program (no spurious nesting).
+  const body = pythonGenerator.statementToCode(block, 'DO');
+  const indent = pythonGenerator.INDENT;
+  return body
+    .split('\n')
+    .map(line => line.startsWith(indent) ? line.slice(indent.length) : line)
+    .join('\n');
 };
 
 Blockly.Blocks['on_forever'] = {
@@ -1642,6 +1770,271 @@ pythonGenerator.forBlock['if_on_edge_bounce'] = function (_block) {
   return 'sprite.if_on_edge_bounce()\n';
 };
 
+// ──────────────────────────────────────────────────────────────────────────────
+// py_call & py_stmt: composable "function call" blocks.
+//
+// These are the primitives the snippet workspaces use so a library call like
+// cv2.VideoCapture(0) shows up as a real composable block tree:
+//
+//   py_call( FUNC="cv2.VideoCapture", ARG0 = math_number(0) )   → expression block
+//   py_stmt( FUNC="cv2.imshow",      ARG0 = text("Gray"),
+//                                    ARG1 = py_getvar("gray") ) → statement block
+//
+// Each argument is a VALUE input slot, so the user can plug text / number /
+// variable / another py_call block into it — that's what "real block coding"
+// looks like, instead of stuffing a Python expression into a text field.
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Generic composable function-call block with a DYNAMIC number of argument
+ * slots. The user clicks +/− on the block header to grow or shrink it —
+ * there's no hard-coded ARG0..ARG3 array anymore, and no dead/empty slots.
+ *
+ * The block state (`argCount`) is serialized via Blockly's mutator API so
+ * workspaces persist across reloads, and pyAst.js's visitor sizes the block
+ * to match the number of AST args it needs to plug in.
+ */
+const _makePyCallBlock = ({ isStatement, colour, tooltip }) => ({
+
+  init: function () {
+    // Start with 0 args + no callee value-input — loadExtraState / visitor will
+    // grow the block. This avoids an empty ARG0 slot for no-arg calls.
+    this.argCount_ = 0;
+    this.hasCallee_ = false;
+    this.appendDummyInput('HEADER')
+      .appendField(new Blockly.FieldTextInput('fn'), 'FUNC')
+      .appendField(new Blockly.FieldImage(
+        "data:image/svg+xml;base64," + btoa(
+          "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><circle cx='8' cy='8' r='7' fill='#10b981'/><path d='M4 8h8M8 4v8' stroke='white' stroke-width='2'/></svg>"
+        ), 16, 16, '+', () => this.appendArg_()))
+      .appendField(new Blockly.FieldImage(
+        "data:image/svg+xml;base64," + btoa(
+          "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><circle cx='8' cy='8' r='7' fill='#ef4444'/><path d='M4 8h8' stroke='white' stroke-width='2'/></svg>"
+        ), 16, 16, '−', () => this.removeArg_()));
+    this.appendDummyInput('TAIL').appendField('()');
+    this.setInputsInline(true);
+    if (isStatement) {
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+    } else {
+      this.setOutput(true, null);
+    }
+    this.setColour(colour);
+    this.setTooltip(tooltip);
+  },
+
+  /** Persist arg count + whether the block uses a CALLEE value input. */
+  mutationToDom: function () {
+    const container = document.createElement('mutation');
+    container.setAttribute('args', String(this.argCount_ || 0));
+    container.setAttribute('callee', this.hasCallee_ ? '1' : '0');
+    return container;
+  },
+  domToMutation: function (xml) {
+    const n = parseInt(xml.getAttribute('args'), 10);
+    const c = xml.getAttribute('callee') === '1';
+    this._rebuild(Number.isFinite(n) ? n : 0, c);
+  },
+  saveExtraState: function () {
+    return { argCount: this.argCount_, hasCallee: !!this.hasCallee_ };
+  },
+  loadExtraState: function (state) {
+    this._rebuild(state.argCount ?? 0, !!state.hasCallee);
+  },
+
+  _rebuild: function (n, hasCallee) {
+    n = Math.max(0, Math.min(20, n | 0));
+    // Remove all dynamic inputs
+    if (this.getInput('CALLEE')) this.removeInput('CALLEE');
+    let i = 0;
+    while (this.getInput(`ARG${i}`)) { this.removeInput(`ARG${i}`); i++; }
+    if (this.getInput('TAIL')) this.removeInput('TAIL');
+    // Optional CALLEE value input — used when the callee is a structural
+    // expression (method chain, attribute path, indexed value).
+    if (hasCallee) {
+      this.appendValueInput('CALLEE').setCheck(null);
+    }
+    for (let k = 0; k < n; k++) {
+      const inp = this.appendValueInput(`ARG${k}`).setCheck(null);
+      if (k === 0) inp.appendField('(');
+      else inp.appendField(',');
+    }
+    this.appendDummyInput('TAIL').appendField(n === 0 ? '()' : ')');
+    this.argCount_ = n;
+    this.hasCallee_ = !!hasCallee;
+  },
+
+  setArgCount_: function (n) { this._rebuild(n, this.hasCallee_); },
+  appendArg_: function () { this._rebuild((this.argCount_ || 0) + 1, this.hasCallee_); },
+  removeArg_: function () { this._rebuild(Math.max(0, (this.argCount_ || 0) - 1), this.hasCallee_); },
+});
+
+Blockly.Blocks['py_call'] = _makePyCallBlock({
+  isStatement: false, colour: '#60a5fa',
+  tooltip: 'Call a function and use its return value. Click + / − to change arg count.',
+});
+Blockly.Blocks['py_stmt'] = _makePyCallBlock({
+  isStatement: true, colour: '#818cf8',
+  tooltip: 'Call a function for its side effect. Click + / − to change arg count.',
+});
+
+const _collectPyArgs = (block, valueToCode) => {
+  const args = [];
+  const n = block.argCount_ ?? 0;
+  for (let i = 0; i < n; i++) {
+    const v = valueToCode(block, `ARG${i}`, 0);
+    // Empty slot → emit "None" so the generated Python is still valid syntax
+    args.push((v === '' || v === null || v === undefined) ? 'None' : v);
+  }
+  return args;
+};
+
+/** The callee expression: prefer the connected CALLEE value-block, fall back to FUNC text. */
+const _readPyCallee = (block, valueToCode) => {
+  if (block.hasCallee_) {
+    const v = valueToCode(block, 'CALLEE', 0);
+    if (v && v.trim()) return v;
+  }
+  return block.getFieldValue('FUNC') || 'fn';
+};
+
+pythonGenerator.forBlock['py_call'] = function (block) {
+  const fn = _readPyCallee(block, pythonGenerator.valueToCode.bind(pythonGenerator));
+  const args = _collectPyArgs(block, pythonGenerator.valueToCode.bind(pythonGenerator));
+  return [`${fn}(${args.join(', ')})`, 0];
+};
+pythonGenerator.forBlock['py_stmt'] = function (block) {
+  const fn = _readPyCallee(block, pythonGenerator.valueToCode.bind(pythonGenerator));
+  const args = _collectPyArgs(block, pythonGenerator.valueToCode.bind(pythonGenerator));
+  return `${fn}(${args.join(', ')})\n`;
+};
+javascriptGenerator.forBlock['py_call'] = function (block) {
+  const fn = _readPyCallee(block, javascriptGenerator.valueToCode.bind(javascriptGenerator));
+  const args = _collectPyArgs(block, javascriptGenerator.valueToCode.bind(javascriptGenerator));
+  return [`/* ${fn}(${args.join(', ')}) */ null`, 0];
+};
+javascriptGenerator.forBlock['py_stmt'] = function (block) {
+  const fn = _readPyCallee(block, javascriptGenerator.valueToCode.bind(javascriptGenerator));
+  const args = _collectPyArgs(block, javascriptGenerator.valueToCode.bind(javascriptGenerator));
+  return `console.log(${JSON.stringify(fn + '()')}, ${args.join(', ')});\n`;
+};
+
+// py_getvar: read a variable by name as a value
+Blockly.Blocks['py_getvar'] = {
+  init: function () {
+    this.appendDummyInput()
+      .appendField('var')
+      .appendField(new Blockly.FieldTextInput('x'), 'VAR_NAME');
+    this.setOutput(true, null);
+    this.setColour('#f97316');
+    this.setTooltip('Reference an existing variable as a value.');
+  }
+};
+pythonGenerator.forBlock['py_getvar'] = function (block) {
+  const n = block.getFieldValue('VAR_NAME') || 'x';
+  return [n, 0];
+};
+javascriptGenerator.forBlock['py_getvar'] = function (block) {
+  const n = block.getFieldValue('VAR_NAME') || 'x';
+  return [n, 0];
+};
+
+// raw_python: verbatim Python statement (no wrapping, no comment downgrade).
+// Used by the AST visitor as the fallback when a Python construct doesn't fit
+// any structural block yet (list comprehensions, decorators, unpacking, etc.)
+// so we never silently drop user code — it runs exactly as written.
+Blockly.Blocks['raw_python'] = {
+  init: function () {
+    this.appendDummyInput()
+      .appendField('py')
+      .appendField(new Blockly.FieldTextInput('pass'), 'CODE');
+    this.setPreviousStatement(true, null);
+    this.setNextStatement(true, null);
+    this.setColour('#94a3b8');
+    this.setTooltip('Verbatim Python statement (fallback for unsupported syntax).');
+  }
+};
+pythonGenerator.forBlock['raw_python'] = function (block) {
+  const code = block.getFieldValue('CODE') || 'pass';
+  return code.endsWith('\n') ? code : code + '\n';
+};
+javascriptGenerator.forBlock['raw_python'] = function (block) {
+  const code = block.getFieldValue('CODE') || '';
+  return `/* python: ${code.replace(/\*\//g, '* /')} */\n`;
+};
+
+// py_binop: composable binary operation (takes two value blocks, not text fields)
+Blockly.Blocks['py_binop'] = {
+  init: function () {
+    this.appendValueInput('A').setCheck(null);
+    this.appendDummyInput()
+      .appendField(new Blockly.FieldTextInput('+'), 'OP');
+    this.appendValueInput('B').setCheck(null);
+    this.setInputsInline(true);
+    this.setOutput(true, null);
+    this.setColour('#0ea5e9');
+    this.setTooltip('Binary operation: + - * / == != < <= > >= and or ...');
+  }
+};
+pythonGenerator.forBlock['py_binop'] = function (block) {
+  const a = pythonGenerator.valueToCode(block, 'A', 0) || '0';
+  const b = pythonGenerator.valueToCode(block, 'B', 0) || '0';
+  const op = (block.getFieldValue('OP') || '+').trim();
+  return [`(${a} ${op} ${b})`, 0];
+};
+javascriptGenerator.forBlock['py_binop'] = function (block) {
+  const a = javascriptGenerator.valueToCode(block, 'A', 0) || '0';
+  const b = javascriptGenerator.valueToCode(block, 'B', 0) || '0';
+  const op = (block.getFieldValue('OP') || '+').trim();
+  return [`(${a} ${op} ${b})`, 0];
+};
+
+// py_unary: composable unary op
+Blockly.Blocks['py_unary'] = {
+  init: function () {
+    this.appendDummyInput().appendField(new Blockly.FieldTextInput('-'), 'OP');
+    this.appendValueInput('A').setCheck(null);
+    this.setInputsInline(true);
+    this.setOutput(true, null);
+    this.setColour('#0ea5e9');
+    this.setTooltip('Unary operation: -x, not x');
+  }
+};
+pythonGenerator.forBlock['py_unary'] = function (block) {
+  const a = pythonGenerator.valueToCode(block, 'A', 0) || '0';
+  const op = (block.getFieldValue('OP') || '-').trim();
+  return [`${op === 'not' ? 'not ' : op}${a}`, 0];
+};
+javascriptGenerator.forBlock['py_unary'] = function (block) {
+  const a = javascriptGenerator.valueToCode(block, 'A', 0) || '0';
+  const op = (block.getFieldValue('OP') || '-').trim();
+  return [`${op === 'not' ? '!' : op}(${a})`, 0];
+};
+
+// py_assign: set VAR = <value-block> (composable right-hand side, unlike 'variable' which is a text field)
+Blockly.Blocks['py_assign'] = {
+  init: function () {
+    this.appendValueInput('VALUE').setCheck(null)
+      .appendField('set')
+      .appendField(new Blockly.FieldTextInput('x'), 'VAR_NAME')
+      .appendField('=');
+    this.setPreviousStatement(true, null);
+    this.setNextStatement(true, null);
+    this.setColour('#a855f7');
+    this.setTooltip('Assign the value on the right to the named variable.');
+  }
+};
+pythonGenerator.forBlock['py_assign'] = function (block) {
+  const n = block.getFieldValue('VAR_NAME') || 'x';
+  const v = pythonGenerator.valueToCode(block, 'VALUE', 0) || 'None';
+  return `${n} = ${v}\n`;
+};
+javascriptGenerator.forBlock['py_assign'] = function (block) {
+  const n = block.getFieldValue('VAR_NAME') || 'x';
+  const v = javascriptGenerator.valueToCode(block, 'VALUE', 0) || 'null';
+  return `let ${n} = ${v};\n`;
+};
+
 export const toolboxCategories = [
   {
     kind: "category",
@@ -1650,7 +2043,6 @@ export const toolboxCategories = [
     contents: [
       { kind: "block", type: "move_right" }, // Keeping internal name, user sees "move 10 steps"
       { kind: "block", type: "turn_right" },
-      { kind: "block", type: "turn_left" },
       { kind: "block", type: "go_to_position" },
       { kind: "block", type: "glide_to_position" },
       { kind: "block", type: "point_in_direction" },
@@ -1676,12 +2068,16 @@ export const toolboxCategories = [
       { kind: "block", type: "think" },
       { kind: "block", type: "switch_costume" },
       { kind: "block", type: "next_costume" },
+      { kind: "block", type: "switch_backdrop" },
+      { kind: "block", type: "next_backdrop" },
       { kind: "block", type: "change_size" },
       { kind: "block", type: "set_size" },
       { kind: "block", type: "show" },
       { kind: "block", type: "hide" },
       { kind: "block", type: "go_to_layer" },
       { kind: "block", type: "costume_number" },
+      { kind: "block", type: "backdrop_number" },
+      { kind: "block", type: "backdrop_name" },
       { kind: "block", type: "size" }
     ]
   },
@@ -1717,9 +2113,17 @@ export const toolboxCategories = [
       { kind: "block", type: "wait" },
       { kind: "block", type: "repeat" },
       { kind: "block", type: "loop_forever" },
-      { kind: "block", type: "repeat_until" }
-      // { kind: "block", type: "wait_until" },
-      // { kind: "block", type: "stop" }
+      { kind: "block", type: "repeat_until" },
+      { kind: "block", type: "py_for_iter" }, // for x in iterable:
+      { kind: "block", type: "py_with" },     // with X as Y:
+      { kind: "block", type: "py_try" },      // try / except / finally
+      { kind: "block", type: "py_raise" },    // raise
+      { kind: "block", type: "py_return" },   // return
+      { kind: "block", type: "py_yield" },    // yield / yield from
+      { kind: "block", type: "py_await" },    // await expr
+      { kind: "block", type: "py_assert" },   // assert
+      { kind: "block", type: "py_match" },    // match / case
+      { kind: "block", type: "py_case" },
     ]
   },
   {
@@ -1731,7 +2135,10 @@ export const toolboxCategories = [
       { kind: "block", type: "if_else" },
       { kind: "block", type: "math_compare" },
       { kind: "block", type: "and_or" },
-      { kind: "block", type: "not" }
+      { kind: "block", type: "not" },
+      { kind: "block", type: "py_ifexp" },     // x if cond else y
+      { kind: "block", type: "py_bool" },      // True / False literal
+      { kind: "block", type: "py_none" },      // None literal
     ]
   },
   {
@@ -1741,6 +2148,9 @@ export const toolboxCategories = [
     contents: [
       { kind: "block", type: "math_number" },
       { kind: "block", type: "math_arithmetic" },
+      { kind: "block", type: "py_binop" },        // Python +/-/*//// + comparisons
+      { kind: "block", type: "py_unary" },        // -x / not x / ~x
+      { kind: "block", type: "py_builtin_cast" }, // str/int/float/len/bool/abs/...
       { kind: "block", type: "math_single" },
       { kind: "block", type: "math_trig" },
       { kind: "block", type: "math_constant" },
@@ -1757,6 +2167,8 @@ export const toolboxCategories = [
     colour: "#990055", // Distinct Text Color (Maroon)
     contents: [
       { kind: "block", type: "text" },
+      { kind: "block", type: "print" },        // Python builtin: print(value)
+      { kind: "block", type: "py_fstring" },   // f-strings
       { kind: "block", type: "join" },
       { kind: "block", type: "text_length" },
       { kind: "block", type: "text_charAt" }
@@ -1766,7 +2178,22 @@ export const toolboxCategories = [
     kind: "category",
     name: "Variables",
     colour: "#A80000", // MakeCode Variables Red
-    custom: "VARIABLE"
+    // Mix Blockly's dynamic Variables UI (Create variable button +
+    // variables_set/get for any var the user defines) with the curated
+    // Scratch-style `variable` and `change_variable` text-field blocks
+    // that pyAst emits for simple assignments and `x += n` forms.
+    custom: "VARIABLE",
+    contents: [
+      { kind: "block", type: "variable" },
+      { kind: "block", type: "change_variable" },
+      { kind: "block", type: "py_assign" },           // structural assign
+      { kind: "block", type: "py_getvar" },           // structural read
+      { kind: "block", type: "py_tuple_assign" },     // a, b = expr
+      { kind: "block", type: "py_subscript_assign" }, // arr[i] = v
+      { kind: "block", type: "py_attr_assign" },      // obj.attr = v
+      { kind: "block", type: "py_delete" },           // del x
+      { kind: "block", type: "py_scope" },            // global / nonlocal
+    ],
   },
   {
     kind: "category",
@@ -1782,7 +2209,14 @@ export const toolboxCategories = [
       { kind: "block", type: "lists_setIndex" },
       { kind: "block", type: "lists_getSublist" },
       { kind: "block", type: "lists_split" },
-      { kind: "block", type: "lists_sort" }
+      { kind: "block", type: "lists_sort" },
+      { kind: "block", type: "py_list" },          // [a, b, c]
+      { kind: "block", type: "py_tuple" },         // (a, b, c)
+      { kind: "block", type: "py_dict" },          // {k: v}
+      { kind: "block", type: "py_subscript" },     // x[i]
+      { kind: "block", type: "py_slice" },         // x[a:b:c]
+      { kind: "block", type: "py_comprehension" }, // [expr for x in iterable]
+      { kind: "block", type: "py_dict_comp" },     // {k: v for ...}
     ]
   },
   {
@@ -1797,6 +2231,26 @@ export const toolboxCategories = [
     colour: "90",
     contents: [
       { kind: "block", type: "comment" }
+    ]
+  },
+  // Python-native structural blocks that don't fit Scratch-style categories.
+  // py_call / py_stmt are generic call wrappers (used when no library schema
+  // matches), py_attr is `obj.attr`, py_keyword_arg is `kw=value` in calls,
+  // py_lambda / py_funcdef build inline functions. These ARE Python's
+  // structural primitives — having a home means a workspace transpiled from
+  // arbitrary Python is fully reproducible from the toolbox.
+  {
+    kind: "category",
+    name: "🐍 Python",
+    colour: "#306998",  // Python brand blue
+    contents: [
+      { kind: "block", type: "py_call" },
+      { kind: "block", type: "py_stmt" },
+      { kind: "block", type: "py_attr" },
+      { kind: "block", type: "py_keyword_arg" },
+      { kind: "block", type: "py_lambda" },
+      { kind: "block", type: "py_funcdef" },
+      { kind: "block", type: "raw_python" },
     ]
   },
   {
@@ -1826,6 +2280,7 @@ export const getFullToolboxConfig = () => ({
   contents: [
     ...BASE_CATEGORIES,
     classToolboxCategory,
+    blockBuilderToolboxCategory,
     ...buildLibraryToolboxCategories()
   ]
 });

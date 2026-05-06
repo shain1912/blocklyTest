@@ -7,7 +7,11 @@ import {
   downloadLibraryJson,
   BUILTIN_LIBRARY_TEMPLATES
 } from '../utils/libraryManager';
+import { convertMetaBlockToLibrary } from '../utils/blockToLibrary';
+import { generateLibraryBlocks } from '../utils/autoBlockGen';
 import './LibraryManager.css';
+
+const ENV_OPENAI_KEY = import.meta.env.VITE_OPENAI_API_KEY || '';
 
 const LibraryManager = ({ workspace, onClose, onToolboxChange }) => {
   const [tab, setTab] = useState('installed'); // 'installed' | 'install' | 'export'
@@ -17,6 +21,12 @@ const LibraryManager = ({ workspace, onClose, onToolboxChange }) => {
   const [installSuccess, setInstallSuccess] = useState('');
   const [exportMeta, setExportMeta] = useState({ name: 'my-library', version: '1.0.0', description: '', author: '', colour: '#1d4ed8' });
   const [exportError, setExportError] = useState('');
+  // AI auto-gen state
+  const [aiLibName, setAiLibName] = useState('');
+  const [aiContext, setAiContext] = useState('');
+  const [aiApiKey, setAiApiKey] = useState(() => ENV_OPENAI_KEY || localStorage.getItem('openai-api-key') || '');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiProgress, setAiProgress] = useState('');
 
   const refresh = () => setInstalled(getInstalledLibraries());
 
@@ -72,7 +82,14 @@ const LibraryManager = ({ workspace, onClose, onToolboxChange }) => {
   const handleExport = () => {
     setExportError('');
     try {
-      const pkg = exportAsLibrary(workspace, exportMeta);
+      // Try meta blocks first (Block Builder), fallback to module export
+      let pkg;
+      try {
+        pkg = convertMetaBlockToLibrary(workspace, exportMeta);
+      } catch (metaError) {
+        // If no meta blocks, try traditional module export
+        pkg = exportAsLibrary(workspace, exportMeta);
+      }
       downloadLibraryJson(pkg);
     } catch (e) {
       setExportError(e.message);
@@ -80,6 +97,39 @@ const LibraryManager = ({ workspace, onClose, onToolboxChange }) => {
   };
 
   const isBuiltinInstalled = (name) => installed.some(l => l.name === name);
+
+  const handleAiGenerate = async () => {
+    if (!aiLibName.trim()) return;
+    const key = ENV_OPENAI_KEY || aiApiKey || localStorage.getItem('openai-api-key') || '';
+    if (!key) { setInstallError('OpenAI API key required. Set VITE_OPENAI_API_KEY in .env or enter below.'); return; }
+
+    setAiLoading(true);
+    setInstallError('');
+    setInstallSuccess('');
+    setAiProgress('Asking AI to analyze library API...');
+
+    try {
+      const pkg = await generateLibraryBlocks(aiLibName.trim(), key, aiContext.trim(),
+        (partial) => {
+          // Show streaming progress
+          const blockCount = (partial.match(/"type"/g) || []).length;
+          setAiProgress(`Generating... (${blockCount} blocks found so far)`);
+        }
+      );
+      installLibrary(pkg);
+      setInstallSuccess(`✅ "${pkg.name}" installed with ${pkg.blocks?.length || 0} blocks via AI!`);
+      setAiLibName('');
+      setAiContext('');
+      setAiProgress('');
+      refresh();
+      if (onToolboxChange) onToolboxChange();
+    } catch (e) {
+      setInstallError(`AI generation failed: ${e.message}`);
+      setAiProgress('');
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   return (
     <div className="lib-manager">
@@ -164,6 +214,43 @@ const LibraryManager = ({ workspace, onClose, onToolboxChange }) => {
               />
               <button className="lib-install-btn" onClick={(e) => handleInstallUrl(e.target.previousElementSibling.value)}>
                 Fetch
+              </button>
+            </div>
+
+            <div className="lib-divider" />
+
+            <div className="lib-section-title">🤖 AI Auto-Generate (OpenAI)</div>
+            <div className="lib-ai-gen">
+              <input
+                type="text"
+                className="lib-input"
+                placeholder="Python library name (e.g., turtle, pandas, pygame)"
+                value={aiLibName}
+                onChange={e => setAiLibName(e.target.value)}
+              />
+              <input
+                type="text"
+                className="lib-input"
+                placeholder="Project context (optional, e.g., 'maze game')"
+                value={aiContext}
+                onChange={e => setAiContext(e.target.value)}
+              />
+              {!ENV_OPENAI_KEY && !localStorage.getItem('openai-api-key') && (
+                <input
+                  type="password"
+                  className="lib-input"
+                  placeholder="OpenAI API key (sk-...)"
+                  value={aiApiKey}
+                  onChange={e => { setAiApiKey(e.target.value); localStorage.setItem('openai-api-key', e.target.value); }}
+                />
+              )}
+              {aiProgress && <div className="lib-ai-progress">{aiProgress}</div>}
+              <button
+                className="lib-install-btn primary"
+                onClick={handleAiGenerate}
+                disabled={aiLoading || !aiLibName.trim()}
+              >
+                {aiLoading ? '⏳ Generating...' : '✨ Generate Blocks with AI'}
               </button>
             </div>
 

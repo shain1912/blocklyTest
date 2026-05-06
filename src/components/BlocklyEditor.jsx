@@ -82,6 +82,9 @@ const BlocklyEditor = ({ onCodeChange, onMount, toolboxVersion }) => {
         onCodeChangeRef.current(workspace.current);
       });
 
+      // Expose workspace for E2E tests
+      window.__blocklyWorkspace = workspace.current;
+
       if (onMountRef.current) {
         onMountRef.current(workspace.current);
       }

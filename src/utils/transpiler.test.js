@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pythonToBlockly } from './transpiler';
+import { pythonToBlockly } from './legacy/transpiler';
 
 describe('Transpiler', () => {
 
@@ -66,10 +66,10 @@ class Test:
         expect(block.fields.DEGREES).toBe('15');
     });
 
-    it('should parse sprite.turn(negative) → turn_left block', () => {
+    it('should parse sprite.turn(negative) → turn_right block with DIRECTION:left', () => {
         const result = pythonToBlockly('sprite.turn(-15)\n');
         const block = result.blocks.blocks[0];
-        expect(block.type).toBe('turn_left');
+        expect(block.type).toBe('turn_right');
         expect(block.fields.DIRECTION).toBe('left');
         expect(block.fields.DEGREES).toBe('15');
     });
@@ -174,7 +174,7 @@ class Test:
         const b = result.blocks.blocks[0];
         expect(b.type).toBe('change_variable');
         expect(b.fields.VAR_NAME).toBe('x');
-        expect(b.fields.CHANGE).toBe('3');
+        expect(b.fields.VALUE).toBe('3');
     });
 
     // ── Print ─────────────────────────────────────────────────────────────
@@ -199,9 +199,121 @@ class Test:
 
     // ── Import ────────────────────────────────────────────────────────────
 
-    it('should parse import time → structure_import', () => {
+    it('import time is silently ignored (no block created)', () => {
         const result = pythonToBlockly('import time\n');
+        expect(result.blocks.blocks).toHaveLength(0);
+    });
+
+    it('import other libs → structure_import block', () => {
+        const result = pythonToBlockly('import turtle\n');
         expect(result.blocks.blocks[0].type).toBe('structure_import');
-        expect(result.blocks.blocks[0].fields.LIBRARY).toBe('time');
+        expect(result.blocks.blocks[0].fields.LIBRARY).toBe('turtle');
+    });
+
+    // ── Roundtrip critical fixes ──────────────────────────────────────────
+
+    it('change_variable: field should be VALUE not CHANGE (roundtrip fix)', () => {
+        const result = pythonToBlockly('x += 3\n');
+        const b = result.blocks.blocks[0];
+        expect(b.type).toBe('change_variable');
+        expect(b.fields.VAR_NAME).toBe('x');
+        expect(b.fields.VALUE).toBe('3');
+        expect(b.fields.CHANGE).toBeUndefined();
+    });
+
+    it('turn_right with left direction (no turn_left block exists)', () => {
+        const result = pythonToBlockly('sprite.turn(-30)\n');
+        const b = result.blocks.blocks[0];
+        expect(b.type).toBe('turn_right');
+        expect(b.fields.DIRECTION).toBe('left');
+        expect(b.fields.DEGREES).toBe('30');
+    });
+
+    it('say with comma inside string should not split incorrectly', () => {
+        const result = pythonToBlockly('sprite.say("Hello, World")\n');
+        const b = result.blocks.blocks[0];
+        expect(b.type).toBe('say');
+        expect(b.inputs.TEXT.block.fields.TEXT).toBe('Hello, World');
+    });
+
+    it('say_for_seconds with comma-containing string and seconds arg', () => {
+        const result = pythonToBlockly('sprite.say("Hi, friend", 3)\n');
+        const b = result.blocks.blocks[0];
+        expect(b.type).toBe('say_for_seconds');
+        expect(b.inputs.TEXT.block.fields.TEXT).toBe('Hi, friend');
+        expect(b.fields.SECONDS).toBe('3');
+    });
+
+    // ── Newly added patterns ──────────────────────────────────────────────
+
+    it('should parse sprite.change_size(n) → change_size block', () => {
+        const result = pythonToBlockly('sprite.change_size(10)\n');
+        const b = result.blocks.blocks[0];
+        expect(b.type).toBe('change_size');
+        expect(b.fields.AMOUNT).toBe('10');
+    });
+
+    it('should parse sprite.set_volume(n) → set_volume block', () => {
+        const result = pythonToBlockly('sprite.set_volume(80)\n');
+        const b = result.blocks.blocks[0];
+        expect(b.type).toBe('set_volume');
+        expect(b.fields.VOLUME).toBe('80');
+    });
+
+    it('should parse sprite.change_volume(n) → change_volume block', () => {
+        const result = pythonToBlockly('sprite.change_volume(-10)\n');
+        const b = result.blocks.blocks[0];
+        expect(b.type).toBe('change_volume');
+        expect(b.fields.AMOUNT).toBe('-10');
+    });
+
+    it('should parse stage.switch_backdrop(name) → switch_backdrop block', () => {
+        const result = pythonToBlockly('stage.switch_backdrop("space")\n');
+        const b = result.blocks.blocks[0];
+        expect(b.type).toBe('switch_backdrop');
+        expect(b.fields.BACKDROP).toBe('space');
+    });
+
+    // ── wrapRunnable option ───────────────────────────────────────────────
+
+    it('wrapRunnable: wraps top-level runnable blocks in on_start', () => {
+        const result = pythonToBlockly('sprite.move(10)\nsprite.say("Hi")\n', { wrapRunnable: true });
+        expect(result.blocks.blocks).toHaveLength(1);
+        const onStart = result.blocks.blocks[0];
+        expect(onStart.type).toBe('on_start');
+        expect(onStart.inputs.DO.block.type).toBe('move_right');
+        // say should be chained via next
+        expect(onStart.inputs.DO.block.next.block.type).toBe('say');
+    });
+
+    it('wrapRunnable: import time is ignored, move wrapped in on_start', () => {
+        const result = pythonToBlockly('import time\nsprite.move(10)\n', { wrapRunnable: true });
+        // import time → silently dropped, move → wrapped in on_start
+        expect(result.blocks.blocks).toHaveLength(1);
+        expect(result.blocks.blocks[0].type).toBe('on_start');
+    });
+
+    it('wrapRunnable: non-time import stays as structural block', () => {
+        const result = pythonToBlockly('import turtle\nsprite.move(10)\n', { wrapRunnable: true });
+        const types = result.blocks.blocks.map(b => b.type);
+        expect(types).toContain('on_start');
+        expect(types).toContain('structure_import');
+    });
+
+    it('wrapRunnable: false (default) leaves blocks as standalone', () => {
+        const result = pythonToBlockly('sprite.move(10)\n');
+        expect(result.blocks.blocks[0].type).toBe('move_right');
+    });
+
+    // ── if_else roundtrip ─────────────────────────────────────────────────
+
+    it('should parse if/else → if_else block', () => {
+        const code = `if x > 0:\n    sprite.move(10)\nelse:\n    sprite.move(-10)\n`;
+        const result = pythonToBlockly(code);
+        const b = result.blocks.blocks[0];
+        expect(b.type).toBe('if_else');
+        expect(b.fields.CONDITION).toBe('x > 0');
+        expect(b.inputs.DO.block.type).toBe('move_right');
+        expect(b.inputs.ELSE.block.type).toBe('move_right');
     });
 });

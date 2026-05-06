@@ -1,0 +1,141 @@
+.blockly-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  position: relative;
+  background: transparent;
+}
+
+.blockly-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background: var(--glass-surface);
+  border-bottom: 1px solid var(--glass-border);
+  color: var(--text-primary);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-left h2 {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.2s var(--ease-spring);
+}
+
+.action-btn:hover {
+  background: var(--glass-highlight);
+  color: var(--primary);
+  border-color: var(--primary);
+  transform: translateY(-2px);
+}
+
+.clear-btn {
+  padding: 8px 20px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clear-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+}
+
+.blockly-editor {
+  flex: 1;
+  min-height: 500px;
+  position: relative;
+}
+
+/* Customizing Blockly Internals */
+.blocklyToolboxDiv {
+  background: var(--bg-darker) !important;
+  border-right: 1px solid var(--glass-border);
+}
+
+.blocklyTreeLabel {
+  color: var(--text-secondary) !important;
+  font-family: var(--font-body) !important;
+  font-weight: 500 !important;
+}
+
+.blocklyTreeRow:hover {
+  background: var(--glass-highlight) !important;
+}
+
+.blocklySelected .blocklyTreeLabel {
+  color: white !important;
+}
+
+.blocklyMainWorkspace {
+  background: var(--bg-dark) !important;
+}
+
+.blocklyScrollbarVertical,
+.blocklyScrollbarHorizontal {
+  background: var(--glass-surface) !important;
+  border-radius: 4px !important;
+}
+
+.blocklyScrollbarHandle {
+  background: var(--glass-border) !important;
+  border-radius: 4px !important;
+}
+
+.blocklyScrollbarHandle:hover {
+  background: var(--glass-highlight) !important;
+}
+
+.blocklyFlyoutBackground {
+  fill: var(--bg-darker) !important;
+  fill-opacity: 0.9 !important;
+}
+
+.blocklyToolboxDiv .blocklyTreeLabel {
+  font-size: 14px !important;
+  padding: 8px 0 !important;
+}
+
+/* Category Colors */
+.blocklyTreeRow.blocklySelected {
+  background-color: var(--primary-glow) !important;
+}

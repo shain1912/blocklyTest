@@ -10,11 +10,47 @@
  * dropped.
  */
 
-import { getLibraryBlockForPython } from './libraryManager';
+import { getLibraryBlockForPython } from '../libraryManager';
 
-export const pythonToBlockly = (pythonCode) => {
+// Block types that are "structural" (library defs, class defs) — never wrapped in on_start
+const STRUCTURAL_TYPES = new Set([
+    'structure_module_def', 'structure_typed_function', 'class_define', 'structure_import',
+    'class_constructor', 'class_method',
+]);
+
+// Hat block types that already have their own container role
+const HAT_TYPES = new Set(['loop_forever', 'on_start', 'on_forever', 'when_flag_clicked']);
+
+export const pythonToBlockly = (pythonCode, options = {}) => {
+    const { wrapRunnable = false } = options;
     const lines = pythonCode.split('\n');
     const variables = new Set();
+
+    // ── Argument splitter (respects quoted strings) ─────────────────────────
+    const splitArgs = (argsStr) => {
+        const parts = [];
+        let current = '';
+        let inString = false;
+        let stringChar = '';
+        for (let i = 0; i < argsStr.length; i++) {
+            const ch = argsStr[i];
+            if (inString) {
+                current += ch;
+                if (ch === stringChar) inString = false;
+            } else if (ch === '"' || ch === "'") {
+                inString = true;
+                stringChar = ch;
+                current += ch;
+            } else if (ch === ',') {
+                parts.push(current.trim());
+                current = '';
+            } else {
+                current += ch;
+            }
+        }
+        if (current.trim()) parts.push(current.trim());
+        return parts;
+    };
 
     // ── Value helpers ───────────────────────────────────────────────────────
     const parseValueInput = (val) => {
@@ -42,7 +78,7 @@ export const pythonToBlockly = (pythonCode) => {
     let indentStack = [0];
     let expectingChild = false;
 
-    lines.forEach((line) => {
+    lines.forEach((line, lineIndex) => {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) return;
 
@@ -79,7 +115,31 @@ export const pythonToBlockly = (pythonCode) => {
         const classMatch = trimmed.match(/^class\s+(\w+)(?:\((\w*)\))?:/);
         if (classMatch) {
             const parent = classMatch[2] || '';
-            container({ type: 'class_define', fields: { NAME: classMatch[1], PARENT: parent }, children: [] });
+            // Check if this is a module (library) or OOP class by peeking at next lines
+            // If we find typed functions (def name(args) -> type:) without 'self', it's a module
+            let isModule = false;
+            for (let j = lineIndex + 1; j < lines.length; j++) {
+                const nextLine = lines[j].trim();
+                if (!nextLine || nextLine.startsWith('#')) continue;
+                // Stop at next top-level class/def
+                if (nextLine.match(/^(class|def)\s+/) && lines[j][0] !== ' ' && lines[j][0] !== '\t') break;
+                // Check for typed function without self (module style)
+                if (nextLine.match(/^def\s+\w+\([^)]*\)\s*->\s*\w+:/) && !nextLine.includes('self')) {
+                    isModule = true;
+                    break;
+                }
+                // If we see __init__ or method with self, it's OOP class
+                if (nextLine.match(/^def\s+(__init__|.*\(self)/)) {
+                    isModule = false;
+                    break;
+                }
+            }
+
+            if (isModule) {
+                container({ type: 'structure_module_def', fields: { NAME: classMatch[1] }, children: [] });
+            } else {
+                container({ type: 'class_define', fields: { NAME: classMatch[1], PARENT: parent }, children: [] });
+            }
             return;
         }
 
@@ -133,10 +193,13 @@ export const pythonToBlockly = (pythonCode) => {
             return;
         }
 
-        // import lib
+        // import lib — 'import time' is silently ignored (time.sleep → wait block handles it implicitly)
+        // Other imports become structure_import blocks for OOP/library code
         const importMatch = trimmed.match(/^import\s+(\w+)/);
         if (importMatch) {
-            leaf({ type: 'structure_import', fields: { LIBRARY: importMatch[1] }, children: [] });
+            if (importMatch[1] !== 'time') {
+                leaf({ type: 'structure_import', fields: { LIBRARY: importMatch[1] }, children: [] });
+            }
             return;
         }
 
@@ -150,13 +213,14 @@ export const pythonToBlockly = (pythonCode) => {
         }
 
         // sprite.turn(degrees)  → positive = right, negative = left
+        // Note: only 'turn_right' block exists (with DIRECTION dropdown)
         const turnMatch = trimmed.match(/^sprite\.turn\((-?[\d.]+)\)/);
         if (turnMatch) {
             const deg = parseFloat(turnMatch[1]);
             if (deg >= 0) {
                 leaf({ type: 'turn_right', fields: { DIRECTION: 'right', DEGREES: String(deg) }, children: [] });
             } else {
-                leaf({ type: 'turn_left', fields: { DIRECTION: 'left', DEGREES: String(-deg) }, children: [] });
+                leaf({ type: 'turn_right', fields: { DIRECTION: 'left', DEGREES: String(-deg) }, children: [] });
             }
             return;
         }
@@ -228,8 +292,8 @@ export const pythonToBlockly = (pythonCode) => {
         // sprite.say(text) or sprite.say(text, seconds)
         const sayMatch = trimmed.match(/^sprite\.say\((.*)\)$/);
         if (sayMatch) {
-            const args = sayMatch[1].split(',');
-            const textRaw = args[0].trim();
+            const args = splitArgs(sayMatch[1]);
+            const textRaw = args[0] || '';
             const inputBlock = parseValueInput(textRaw);
             if (args.length > 1) {
                 const sec = args[1].trim();
@@ -243,8 +307,8 @@ export const pythonToBlockly = (pythonCode) => {
         // sprite.think(text) or sprite.think(text, seconds)
         const thinkMatch = trimmed.match(/^sprite\.think\((.*)\)$/);
         if (thinkMatch) {
-            const args = thinkMatch[1].split(',');
-            const textRaw = args[0].trim();
+            const args = splitArgs(thinkMatch[1]);
+            const textRaw = args[0] || '';
             const inputBlock = parseValueInput(textRaw);
             if (args.length > 1) {
                 const sec = args[1].trim();
@@ -304,6 +368,53 @@ export const pythonToBlockly = (pythonCode) => {
         // sprite.stop_all_sounds()
         if (trimmed === 'sprite.stop_all_sounds()') {
             leaf({ type: 'stop_all_sounds', fields: {}, children: [] });
+            return;
+        }
+
+        // sprite.set_volume(n)
+        const setVolumeMatch = trimmed.match(/^sprite\.set_volume\((-?[\d.]+)\)/);
+        if (setVolumeMatch) {
+            leaf({ type: 'set_volume', fields: { VOLUME: setVolumeMatch[1] }, children: [] });
+            return;
+        }
+
+        // sprite.change_volume(n)
+        const changeVolumeMatch = trimmed.match(/^sprite\.change_volume\((-?[\d.]+)\)/);
+        if (changeVolumeMatch) {
+            leaf({ type: 'change_volume', fields: { AMOUNT: changeVolumeMatch[1] }, children: [] });
+            return;
+        }
+
+        // sprite.change_size(n)
+        const changeSizeMatch = trimmed.match(/^sprite\.change_size\((-?[\d.]+)\)/);
+        if (changeSizeMatch) {
+            leaf({ type: 'change_size', fields: { AMOUNT: changeSizeMatch[1] }, children: [] });
+            return;
+        }
+
+        // sprite.go_to_layer("front"|"back")
+        const goToLayerMatch = trimmed.match(/^sprite\.go_to_layer\("(.*)"\)/);
+        if (goToLayerMatch) {
+            leaf({ type: 'go_to_layer', fields: { LAYER: goToLayerMatch[1] }, children: [] });
+            return;
+        }
+
+        // stage.switch_backdrop("name")
+        const switchBackdropMatch = trimmed.match(/^stage\.switch_backdrop\("(.*)"\)/);
+        if (switchBackdropMatch) {
+            leaf({ type: 'switch_backdrop', fields: { BACKDROP: switchBackdropMatch[1] }, children: [] });
+            return;
+        }
+
+        // stage.next_backdrop()
+        if (trimmed === 'stage.next_backdrop()') {
+            leaf({ type: 'next_backdrop', fields: {}, children: [] });
+            return;
+        }
+
+        // sprite.reset_timer()
+        if (trimmed === 'sprite.reset_timer()') {
+            leaf({ type: 'reset_timer', fields: {}, children: [] });
             return;
         }
 
@@ -377,7 +488,7 @@ export const pythonToBlockly = (pythonCode) => {
         // x += value  → change_variable
         const changeVarMatch = trimmed.match(/^(\w+)\s*\+=\s*(.*)/);
         if (changeVarMatch) {
-            leaf({ type: 'change_variable', fields: { VAR_NAME: changeVarMatch[1], CHANGE: changeVarMatch[2].trim() }, children: [] });
+            leaf({ type: 'change_variable', fields: { VAR_NAME: changeVarMatch[1], VALUE: changeVarMatch[2].trim() }, children: [] });
             return;
         }
 
@@ -487,7 +598,8 @@ export const pythonToBlockly = (pythonCode) => {
 
     const isSeparator = (type) =>
         type === 'structure_module_def' || type === 'structure_typed_function' ||
-        type === 'class_define';
+        type === 'class_define' || type === 'structure_import' ||
+        type === 'class_instance' || type === 'class_method_call';
 
     root.children.forEach((child) => {
         const block = treeToBlock(child);
@@ -512,16 +624,61 @@ export const pythonToBlockly = (pythonCode) => {
         }
     });
 
+    // ── Optional: wrap runnable top-level chains in on_start ───────────────
+    let finalBlocks = codeBlocks;
+    if (wrapRunnable) {
+        const runnableBlocks = [];
+        const structuralBlocks = [];
+
+        codeBlocks.forEach(block => {
+            if (STRUCTURAL_TYPES.has(block.type) || HAT_TYPES.has(block.type)) {
+                structuralBlocks.push(block);
+            } else {
+                runnableBlocks.push(block);
+            }
+        });
+
+        if (runnableBlocks.length > 0) {
+            // Chain all runnable blocks together and wrap in on_start
+            let head = runnableBlocks[0];
+            let tail = head;
+            // find tail of chain
+            while (tail.next) tail = tail.next.block;
+            for (let i = 1; i < runnableBlocks.length; i++) {
+                tail.next = { block: runnableBlocks[i] };
+                tail = runnableBlocks[i];
+                while (tail.next) tail = tail.next.block;
+            }
+            const onStartBlock = {
+                kind: 'block',
+                type: 'on_start',
+                fields: {},
+                inputs: { DO: { block: head } },
+                next: null,
+            };
+            // Imports / classes / typed functions always sit ABOVE on_start
+            // so the workspace reads top-down: imports → definitions → runnable code
+            const imports = structuralBlocks.filter(b => b.type === 'structure_import');
+            const defs    = structuralBlocks.filter(b => b.type !== 'structure_import');
+            finalBlocks = [...imports, ...defs, onStartBlock];
+        } else {
+            // No runnable code — still keep imports first
+            const imports = structuralBlocks.filter(b => b.type === 'structure_import');
+            const defs    = structuralBlocks.filter(b => b.type !== 'structure_import');
+            finalBlocks = [...imports, ...defs];
+        }
+    }
+
     // Simple auto-layout
     let currentY = 50;
-    codeBlocks.forEach((block) => {
+    finalBlocks.forEach((block) => {
         block.x = 50;
         block.y = currentY;
         currentY += 300;
     });
 
     return {
-        blocks: { blocks: codeBlocks },
+        blocks: { blocks: finalBlocks },
         variables: Array.from(variables).map((name) => ({ name, id: 'var_' + name }))
     };
 };

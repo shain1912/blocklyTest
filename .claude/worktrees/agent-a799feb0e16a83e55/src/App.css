@@ -1,0 +1,311 @@
+/* Main Interface Layout */
+.app-layout {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  width: 100vw;
+  background-color: #0f172a;
+  /* Match workspace background/dark theme */
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1;
+  padding: 16px;
+  /* Reduced from 24px */
+  gap: 16px;
+  /* Reduced from 24px */
+  min-width: 0;
+  /* Prevent flex overflow */
+}
+
+/* Header */
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 32px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.scratch-logo {
+  width: 48px;
+  height: 48px;
+  filter: drop-shadow(0 0 10px var(--primary-glow));
+}
+
+.scratch-icon circle {
+  fill: var(--primary);
+}
+
+.header-text h1 {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #fff 0%, #cbd5e1 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.header-text p {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+/* Main Layout */
+.app-main {
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  gap: 24px;
+  flex: 1;
+  min-height: 0;
+  /* Prevent overflow */
+}
+
+/* Glass Panels */
+.editor-section,
+.right-panel {
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+}
+
+.editor-section {
+  position: relative;
+}
+
+.right-panel {
+  gap: 0;
+}
+
+.code-section {
+  flex: 1;
+  border-bottom: 1px solid var(--glass-border);
+  padding: 20px;
+  overflow: auto;
+}
+
+.stage-section {
+  flex: 0 0 auto;
+  height: 50%;
+  min-height: 180px;
+  overflow: hidden;
+}
+
+.output-section {
+  flex: 1;
+  padding: 12px 16px;
+  background: rgba(0, 0, 0, 0.2);
+  overflow: auto;
+  min-height: 80px;
+}
+
+/* Footer / Controls */
+.app-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  padding: 16px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+}
+
+.run-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 32px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: white;
+  background: linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px var(--primary-glow);
+  transition: all 0.3s var(--ease-spring);
+}
+
+.run-btn:hover:not(:disabled) {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 8px 20px var(--primary-glow);
+}
+
+.run-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.clear-output-btn {
+  padding: 12px 24px;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+}
+
+.clear-output-btn:hover {
+  background: var(--glass-highlight);
+  color: white;
+  border-color: var(--text-secondary);
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .app-main {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+}
+
+/* Editor Section Layout - MakeCode Style */
+.editor-section {
+  display: flex !important;
+  /* Force flex */
+  flex-direction: column;
+  flex: 1;
+  background-color: #1e1e2e;
+  border-right: 1px solid #334155;
+  position: relative;
+  overflow: hidden;
+}
+
+.editor-header {
+  height: 60px;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #1e1e2e;
+  border-bottom: 1px solid #334155;
+  padding: 0 1rem;
+  z-index: 10;
+}
+
+/* Pill Toggle - MakeCode Aesthetic */
+.mode-toggle.pill-toggle {
+  display: flex;
+  background-color: #0f172a;
+  padding: 4px;
+  border-radius: 9999px;
+  /* Full pill */
+  border: 1px solid #334155;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+  gap: 4px;
+}
+
+.mode-toggle.pill-toggle .toggle-btn {
+  background: transparent;
+  color: #94a3b8;
+  border: none;
+  padding: 8px 24px;
+  border-radius: 9999px;
+  cursor: pointer;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-weight: 600;
+  font-size: 0.9rem;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.mode-toggle.pill-toggle .toggle-btn:hover {
+  color: #e2e8f0;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.mode-toggle.pill-toggle .toggle-btn.active {
+  background-color: #6366f1;
+  /* Brand Indigo */
+  color: white;
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.4);
+}
+
+.mode-toggle.pill-toggle .toggle-btn.active:hover {
+  background-color: #4f46e5;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.5);
+}
+
+/* Ensure editors fill remaining space */
+.editor-section>div[style*="block"] {
+  height: calc(100% - 60px) !important;
+  width: 100%;
+}
+
+/* Editor body: horizontal flex so AI/lib panels sit beside the editor */
+.editor-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* AI and Library side panels */
+.ai-panel,
+.lib-panel {
+  width: 320px;
+  min-width: 280px;
+  max-width: 400px;
+  flex-shrink: 0;
+  height: 100%;
+  overflow: hidden;
+  border-left: 1px solid #1e293b;
+}
+
+/* Header tool buttons */
+.editor-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.tool-btn {
+  background: transparent;
+  border: 1px solid #334155;
+  color: #94a3b8;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.tool-btn:hover {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+.tool-btn.active {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: #6366f1;
+  color: #a5b4fc;
+}
+
+/* Controls section */
+.controls-section {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid #1e293b;
+  background: #0d1117;
+  flex-shrink: 0;
+}
